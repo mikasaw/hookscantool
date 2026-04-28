@@ -1,0 +1,255 @@
+#include "engine.h"
+#include "process.h"
+#include "iat_scanner.h"
+#include "eat_scanner.h"
+#include "inline_scanner.h"
+#include "chain_tracer.h"
+#include "restore.h"
+#include "wow64.h"
+#include <stdlib.h>
+#include <string.h>
+#include <stdio.h>
+
+#define INITIAL_HOOK_CAP 256
+
+hook_report_t* engine_scan_process(uint32_t pid)
+{
+    hook_report_t* report = (hook_report_t*)calloc(1, sizeof(hook_report_t));
+    if (!report) return NULL;
+
+    report->pid = pid;
+    LARGE_INTEGER freq, t0, t1;
+    QueryPerformanceFrequency(&freq);
+    QueryPerformanceCounter(&t0);
+
+    /* Open target process */
+    HANDLE process = OpenProcess(
+        PROCESS_VM_READ | PROCESS_QUERY_INFORMATION,
+        FALSE, pid);
+
+    if (!process) {
+        DWORD err = GetLastError();
+        report->error_code = ENGINE_ACCESS_DENIED;
+        snprintf(report->error_msg, sizeof(report->error_msg),
+                 "OpenProcess failed (error %lu). Run as Administrator.", err);
+        QueryPerformanceCounter(&t1);
+        report->scan_time_ms = (uint64_t)((t1.QuadPart - t0.QuadPart) * 1000 / freq.QuadPart);
+        return report;
+    }
+
+    /* Get process info with modules */
+    process_info_t pinfo;
+    memset(&pinfo, 0, sizeof(pinfo));
+
+    bool is_wow64 = wow64_is_process(process);
+
+    int mod_result;
+    if (is_wow64) {
+        mod_result = wow64_enum_modules(pid, &pinfo);
+        pinfo.pid = pid;
+    } else {
+        mod_result = process_get_info(pid, &pinfo);
+    }
+
+    if (mod_result != 0) {
+        report->error_code = ENGINE_PROCESS_NOT_FOUND;
+        snprintf(report->error_msg, sizeof(report->error_msg),
+                 "Cannot enumerate modules for PID %u", pid);
+        CloseHandle(process);
+        QueryPerformanceCounter(&t1);
+        report->scan_time_ms = (uint64_t)((t1.QuadPart - t0.QuadPart) * 1000 / freq.QuadPart);
+        return report;
+    }
+
+    strncpy(report->process_name, pinfo.name, sizeof(report->process_name) - 1);
+
+    /* Allocate hooks array */
+    int hook_cap = INITIAL_HOOK_CAP;
+    report->hooks = (hook_entry_t*)calloc(hook_cap, sizeof(hook_entry_t));
+    if (!report->hooks) {
+        report->error_code = ENGINE_NO_MEMORY;
+        CloseHandle(process);
+        process_free_modules(&pinfo);
+        QueryPerformanceCounter(&t1);
+        report->scan_time_ms = (uint64_t)((t1.QuadPart - t0.QuadPart) * 1000 / freq.QuadPart);
+        return report;
+    }
+
+    /* Scan each module */
+    for (int m = 0; m < pinfo.module_count; m++) {
+        const module_info_t* mod = &pinfo.modules[m];
+        report->modules_scanned++;
+
+        /* Grow hooks array if needed */
+        if (report->hook_count + 32 >= hook_cap) {
+            hook_cap *= 2;
+            hook_entry_t* new_hooks = (hook_entry_t*)realloc(report->hooks, hook_cap * sizeof(hook_entry_t));
+            if (!new_hooks) break;
+            report->hooks = new_hooks;
+            memset(report->hooks + report->hook_count, 0,
+                   (hook_cap - report->hook_count) * sizeof(hook_entry_t));
+        }
+
+        int room = hook_cap - report->hook_count;
+
+        /* IAT scan */
+        int n = iat_scan_module(process, pid, mod, &pinfo,
+                                report->hooks + report->hook_count, room);
+        if (n > 0) report->hook_count += n;
+        room = hook_cap - report->hook_count;
+
+        /* EAT scan */
+        if (room > 0) {
+            n = eat_scan_module(process, mod,
+                                report->hooks + report->hook_count, room);
+            if (n > 0) report->hook_count += n;
+            room = hook_cap - report->hook_count;
+        }
+
+        /* Inline scan */
+        if (room > 0) {
+            n = inline_scan_module(process, mod,
+                                   report->hooks + report->hook_count, room);
+            if (n > 0) report->hook_count += n;
+        }
+    }
+
+    /* Trace hook chains for inline hooks */
+    bool is_64bit = !is_wow64;
+    for (int i = 0; i < report->hook_count; i++) {
+        if (report->hooks[i].type == HOOK_INLINE && report->hooks[i].chain_depth == 0) {
+            chain_step_t chain[MAX_CHAIN_DEPTH];
+            int chain_len = 0;
+            if (chain_trace(process, report->hooks[i].current_addr, is_64bit,
+                           chain, &chain_len) == 0 && chain_len > 0) {
+                report->hooks[i].chain = (chain_step_t*)calloc(chain_len, sizeof(chain_step_t));
+                if (report->hooks[i].chain) {
+                    memcpy(report->hooks[i].chain, chain, chain_len * sizeof(chain_step_t));
+                    report->hooks[i].chain_depth = chain_len;
+                }
+            }
+        }
+    }
+
+    QueryPerformanceCounter(&t1);
+    report->scan_time_ms = (uint64_t)((t1.QuadPart - t0.QuadPart) * 1000 / freq.QuadPart);
+
+    CloseHandle(process);
+    process_free_modules(&pinfo);
+    return report;
+}
+
+int engine_scan_module(uint32_t pid, const module_info_t* mod,
+                       hook_entry_t* hooks, int hook_cap)
+{
+    HANDLE process = OpenProcess(PROCESS_VM_READ | PROCESS_QUERY_INFORMATION, FALSE, pid);
+    if (!process) return -1;
+
+    process_info_t pinfo;
+    memset(&pinfo, 0, sizeof(pinfo));
+    if (process_get_info(pid, &pinfo) != 0) {
+        CloseHandle(process);
+        return -1;
+    }
+
+    int total = 0;
+
+    int n = iat_scan_module(process, pid, mod, &pinfo, hooks, hook_cap);
+    if (n > 0) total += n;
+
+    n = eat_scan_module(process, mod, hooks + total, hook_cap - total);
+    if (n > 0) total += n;
+
+    n = inline_scan_module(process, mod, hooks + total, hook_cap - total);
+    if (n > 0) total += n;
+
+    process_free_modules(&pinfo);
+    CloseHandle(process);
+    return total;
+}
+
+bool engine_restore_hook(uint32_t pid, hook_entry_t* entry)
+{
+    HANDLE process = OpenProcess(
+        PROCESS_VM_READ | PROCESS_VM_WRITE | PROCESS_VM_OPERATION,
+        FALSE, pid);
+    if (!process) return false;
+
+    bool result = restore_hook(process, pid, entry);
+    CloseHandle(process);
+    return result;
+}
+
+int engine_report_to_json(const hook_report_t* report, const char* path)
+{
+    if (!report || !path) return -1;
+
+    FILE* f = fopen(path, "w");
+    if (!f) return -1;
+
+    fprintf(f, "{\n");
+    fprintf(f, "  \"pid\": %u,\n", report->pid);
+    fprintf(f, "  \"process_name\": \"%s\",\n", report->process_name);
+    fprintf(f, "  \"hook_count\": %d,\n", report->hook_count);
+    fprintf(f, "  \"modules_scanned\": %d,\n", report->modules_scanned);
+    fprintf(f, "  \"scan_time_ms\": %llu,\n", (unsigned long long)report->scan_time_ms);
+    fprintf(f, "  \"hooks\": [\n");
+
+    for (int i = 0; i < report->hook_count; i++) {
+        const hook_entry_t* h = &report->hooks[i];
+        const char* type_str = (h->type == HOOK_IAT) ? "IAT" :
+                               (h->type == HOOK_INLINE) ? "INLINE" : "EAT";
+
+        fprintf(f, "    {\n");
+        fprintf(f, "      \"module\": \"%s\",\n", h->module_name);
+        fprintf(f, "      \"function\": \"%s\",\n", h->function_name);
+        fprintf(f, "      \"type\": \"%s\",\n", type_str);
+        fprintf(f, "      \"original_addr\": \"0x%016llX\",\n", (unsigned long long)h->original_addr);
+        fprintf(f, "      \"current_addr\": \"0x%016llX\",\n", (unsigned long long)h->current_addr);
+        fprintf(f, "      \"restorable\": %s,\n", h->restorable ? "true" : "false");
+        fprintf(f, "      \"chain_depth\": %d,\n", h->chain_depth);
+
+        /* Original bytes */
+        fprintf(f, "      \"original_bytes\": \"");
+        for (int b = 0; b < h->original_byte_count; b++)
+            fprintf(f, "%02X", h->original_bytes[b]);
+        fprintf(f, "\",\n");
+
+        /* Hooked bytes */
+        fprintf(f, "      \"hooked_bytes\": \"");
+        for (int b = 0; b < h->hooked_byte_count; b++)
+            fprintf(f, "%02X", h->hooked_bytes[b]);
+        fprintf(f, "\",\n");
+
+        fprintf(f, "      \"chain\": [\n");
+
+        for (int j = 0; j < h->chain_depth; j++) {
+            fprintf(f, "        {\"address\": \"0x%016llX\", \"disasm\": \"%s\"}%s\n",
+                    (unsigned long long)h->chain[j].address,
+                    h->chain[j].disasm,
+                    (j < h->chain_depth - 1) ? "," : "");
+        }
+
+        fprintf(f, "      ]\n");
+        fprintf(f, "    }%s\n", (i < report->hook_count - 1) ? "," : "");
+    }
+
+    fprintf(f, "  ]\n");
+    fprintf(f, "}\n");
+    fclose(f);
+    return 0;
+}
+
+void engine_free_report(hook_report_t* report)
+{
+    if (!report) return;
+    if (report->hooks) {
+        for (int i = 0; i < report->hook_count; i++) {
+            if (report->hooks[i].chain) {
+                free(report->hooks[i].chain);
+            }
+        }
+        free(report->hooks);
+    }
+    free(report);
+}

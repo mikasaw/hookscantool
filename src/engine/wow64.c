@@ -1,0 +1,59 @@
+#include "wow64.h"
+#include "process.h"
+#include <tlhelp32.h>
+#include <stdlib.h>
+#include <string.h>
+
+typedef NTSTATUS(NTAPI* NtWow64ReadVirtualMemory64_t)(
+    HANDLE ProcessHandle,
+    ULONG64 BaseAddress,
+    PVOID Buffer,
+    ULONG64 Size,
+    PULONG64 NumberOfBytesRead
+);
+
+bool wow64_is_process(HANDLE process)
+{
+    BOOL is_wow64 = FALSE;
+    if (!IsWow64Process(process, &is_wow64))
+        return false;
+    return is_wow64 ? true : false;
+}
+
+int wow64_enum_modules(uint32_t pid, process_info_t* info)
+{
+    /* WoW64 modules use the same Toolhelp32 API; just mark them as wow64 */
+    int result = process_enum_modules(pid, info);
+    if (result == 0) {
+        for (int i = 0; i < info->module_count; i++) {
+            info->modules[i].is_wow64 = true;
+        }
+    }
+    return result;
+}
+
+BOOL wow64_read_memory(HANDLE process, LPCVOID addr, LPVOID buf, SIZE_T size, SIZE_T* read)
+{
+    static NtWow64ReadVirtualMemory64_t fn = NULL;
+    static bool tried = false;
+
+    if (!tried) {
+        HMODULE ntdll = GetModuleHandleA("ntdll.dll");
+        if (ntdll) {
+            fn = (NtWow64ReadVirtualMemory64_t)GetProcAddress(ntdll, "NtWow64ReadVirtualMemory64");
+        }
+        tried = true;
+    }
+
+    if (fn) {
+        ULONG64 bytes_read = 0;
+        ULONG64 addr64 = (ULONG64)(uintptr_t)addr;
+        NTSTATUS status = fn(process, addr64, buf, (ULONG64)size, &bytes_read);
+        if (status == 0) {
+            if (read) *read = (SIZE_T)bytes_read;
+            return TRUE;
+        }
+    }
+
+    return ReadProcessMemory(process, addr, buf, size, read);
+}

@@ -1,0 +1,9 @@
+build/
+build3/
+deps/zydis.zip
+deps/imgui.zip
+*.exe
+*.obj
+*.o
+*.a
+*.lib
