@@ -4,7 +4,41 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Status
 
-This is a new, empty project. No source code, build system, or tests exist yet. Update this file as the project takes shape.
+Working project. Both CLI (`hookscan_cli`) and GUI (`hookscantool`) build and run.
+
+## Build
+
+```bash
+mkdir -p build && cd build && cmake .. -G "MinGW Makefiles" && mingw32-make -j4
+```
+
+For MSVC: `cmake .. -G "Visual Studio 17 2022" -A x64` then build in VS.
+
+Output: `build/hookscan_cli.exe` (CLI) and `build/hookscantool.exe` (GUI).
+
+## Architecture
+
+- **Engine** (`src/engine/`, pure C): PE parsing, process enumeration, IAT/EAT/inline hook scanning, Zydis-based chain tracing, hook restoration, WoW64 support. Static library `hookscan_engine`.
+- **CLI** (`src/cli/main.c`): Command-line interface. `--list`, scan by PID, `--json`, `--restore`.
+- **GUI** (`src/gui/*.cpp`): Dear ImGui + DirectX 11. Process tree, hook list, chain view, restore panel. Scans run in background thread.
+- **Dependencies** (`deps/`): Zydis v4.0.0 + Zycore (local), Dear ImGui v1.91.8 (local).
+
+## Key APIs
+
+- `engine_scan_process(pid)` → `hook_report_t*` (always returns report, check `error_code`)
+- `engine_restore_hook(pid, entry)` → bool
+- `engine_report_to_json(report, path)` → int
+- `engine_free_report(report)` — must call to clean up chain arrays
+
+## Engine ↔ GUI interop
+
+Engine headers use `extern "C"` blocks. GUI .cpp files call engine functions directly.
+
+## Scanner signatures
+
+- `iat_scan_module(process, pid, mod, pinfo, hooks, cap)` — needs pre-enumerated module list
+- `eat_scan_module(process, mod, hooks, cap)`
+- `inline_scan_module(process, mod, hooks, cap)`
 
 ## gstack
 
