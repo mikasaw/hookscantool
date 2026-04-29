@@ -63,6 +63,10 @@ int eat_scan_module(HANDLE process, const module_info_t* mod,
         if (!ReadProcessMemory(process, (LPCVOID)(ordinals_addr + i * 2), &ordinal, 2, NULL))
             continue;
 
+        /* Validate ordinal against NumberOfFunctions to prevent OOB */
+        if (ordinal >= exp_dir.NumberOfFunctions)
+            continue;
+
         /* Read in-memory function RVA */
         uint32_t mem_func_rva;
         if (!ReadProcessMemory(process, (LPCVOID)(functions_addr + ordinal * 4), &mem_func_rva, 4, NULL))
@@ -85,13 +89,6 @@ int eat_scan_module(HANDLE process, const module_info_t* mod,
 
         if (!found_in_disk) continue;
 
-        /* Skip if both memory and disk RVAs point within the module.
-         * A real EAT hook redirects the export outside the owning DLL.
-         * If both point inside, it's likely a normal version difference
-         * or re-export, not a malicious hook. */
-        if (mem_func_rva < mod->size && disk_func_rva < mod->size)
-            continue;
-
         /* Compare: if RVAs differ, it's an EAT hook */
         if (mem_func_rva != disk_func_rva) {
             hook_entry_t* h = &hooks[found];
@@ -105,9 +102,11 @@ int eat_scan_module(HANDLE process, const module_info_t* mod,
             h->restorable = !mem_image.is_packed && !disk_image.is_packed;
 
             /* Read hooked bytes at the current address */
+            SIZE_T hooked_read = 0;
             ReadProcessMemory(process, (LPCVOID)h->current_addr,
                               h->hooked_bytes, sizeof(h->hooked_bytes),
-                              (SIZE_T*)&h->hooked_byte_count);
+                              &hooked_read);
+            h->hooked_byte_count = (int)(hooked_read > sizeof(h->hooked_bytes) ? sizeof(h->hooked_bytes) : hooked_read);
 
             /* Read original bytes from on-disk */
             uint32_t disk_offset;
@@ -116,6 +115,9 @@ int eat_scan_module(HANDLE process, const module_info_t* mod,
                 memcpy(h->original_bytes, disk_data + disk_offset, sizeof(h->original_bytes));
                 h->original_byte_count = sizeof(h->original_bytes);
             }
+
+            if (h->original_byte_count == 0)
+                h->restorable = false;
 
             found++;
         }

@@ -41,9 +41,17 @@ static HANDLE* suspend_threads(uint32_t pid, int* count)
         int i = 0;
         do {
             if (te.th32OwnerProcessID == pid && i < total) {
-                HANDLE t = OpenThread(THREAD_SUSPEND_RESUME, FALSE, te.th32ThreadID);
+                HANDLE t = OpenThread(THREAD_SUSPEND_RESUME | THREAD_GET_CONTEXT,
+                                      FALSE, te.th32ThreadID);
                 if (t) {
                     SuspendThread(t);
+                    /* Force the kernel to wait until the thread is actually
+                     * suspended. Without this, SuspendThread is asynchronous
+                     * and the thread may still be executing when we write. */
+                    CONTEXT ctx;
+                    memset(&ctx, 0, sizeof(ctx));
+                    ctx.ContextFlags = CONTEXT_CONTROL;
+                    GetThreadContext(t, &ctx);
                     threads[i++] = t;
                 }
             }
@@ -73,6 +81,12 @@ bool restore_hook(HANDLE process, uint32_t pid, hook_entry_t* entry)
     /* Suspend threads to prevent execution of partially-written code */
     int thread_count = 0;
     HANDLE* threads = suspend_threads(pid, &thread_count);
+
+    if (!threads) {
+        /* Cannot safely write to the process without suspending its threads.
+         * The target could execute partially-written code and crash. */
+        return false;
+    }
 
     /* Change memory protection to writable */
     DWORD old_protect;

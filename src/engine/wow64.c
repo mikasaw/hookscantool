@@ -32,18 +32,26 @@ int wow64_enum_modules(uint32_t pid, process_info_t* info)
     return result;
 }
 
-BOOL wow64_read_memory(HANDLE process, LPCVOID addr, LPVOID buf, SIZE_T size, SIZE_T* read)
+static NtWow64ReadVirtualMemory64_t wow64_resolve_fn(void)
 {
     static NtWow64ReadVirtualMemory64_t fn = NULL;
-    static bool tried = false;
+    static LONG resolved = 0;
 
-    if (!tried) {
+    if (InterlockedCompareExchange(&resolved, 0, 0) == 0) {
         HMODULE ntdll = GetModuleHandleA("ntdll.dll");
+        NtWow64ReadVirtualMemory64_t tmp = NULL;
         if (ntdll) {
-            fn = (NtWow64ReadVirtualMemory64_t)GetProcAddress(ntdll, "NtWow64ReadVirtualMemory64");
+            tmp = (NtWow64ReadVirtualMemory64_t)GetProcAddress(ntdll, "NtWow64ReadVirtualMemory64");
         }
-        tried = true;
+        InterlockedExchangePointer((PVOID*)&fn, tmp);
+        InterlockedExchange(&resolved, 1);
     }
+    return fn;
+}
+
+BOOL wow64_read_memory(HANDLE process, LPCVOID addr, LPVOID buf, SIZE_T size, SIZE_T* read)
+{
+    NtWow64ReadVirtualMemory64_t fn = wow64_resolve_fn();
 
     if (fn) {
         ULONG64 bytes_read = 0;

@@ -74,8 +74,9 @@ int main(int argc, char* argv[])
             json_path = argv[++i];
         } else if (strcmp(argv[i], "--restore") == 0 && i + 1 < argc) {
             char* endp_r = NULL;
+            errno = 0;
             long val = strtol(argv[++i], &endp_r, 10);
-            if (*endp_r != '\0' || val < 0) {
+            if (*endp_r != '\0' || val < 0 || val > INT_MAX || errno != 0) {
                 printf("Invalid restore index: %s\n", argv[i]);
                 return 1;
             }

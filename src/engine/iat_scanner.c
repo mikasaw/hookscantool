@@ -76,6 +76,15 @@ int iat_scan_module(HANDLE process, uint32_t pid, const module_info_t* mod,
         uintptr_t oft_rva = desc.OriginalFirstThunk;
         uintptr_t thunk_size = image.is_64bit ? 8 : 4;
 
+        /* Parse the on-disk DLL once for this import descriptor */
+        uint8_t* disk_data = NULL;
+        size_t   disk_size = 0;
+        pe_image_t disk_image;
+        bool have_disk = false;
+        if (dll_path) {
+            have_disk = (pe_parse_from_disk(dll_path, &disk_data, &disk_size, &disk_image) == 0);
+        }
+
         for (int j = 0; j < thunk_count && found < hook_cap; j++) {
             /* Read the IAT entry (current function pointer) */
             uintptr_t iat_entry_addr = mod->base_addr + first_thunk + j * thunk_size;
@@ -93,8 +102,6 @@ int iat_scan_module(HANDLE process, uint32_t pid, const module_info_t* mod,
                 strncpy(h->module_name, dll_name, sizeof(h->module_name) - 1);
                 h->type = HOOK_IAT;
                 h->current_addr = func_ptr;
-                h->restorable = !image.is_packed;
-
                 h->restorable = false;
 
                 /* Try to read the function name from OriginalFirstThunk */
@@ -117,41 +124,42 @@ int iat_scan_module(HANDLE process, uint32_t pid, const module_info_t* mod,
                     }
                 }
 
-                /* Resolve original address and bytes from on-disk DLL (single parse) */
-                if (dll_path && h->function_name[0] != '\0') {
-                    uint8_t* disk_data = NULL;
-                    size_t   disk_size = 0;
-                    pe_image_t disk_image;
-                    if (pe_parse_from_disk(dll_path, &disk_data, &disk_size, &disk_image) == 0) {
-                        /* Find the export RVA */
-                        for (int k = 0; k < disk_image.export_count; k++) {
-                            if (strcmp(disk_image.exports[k].name, h->function_name) == 0) {
-                                uintptr_t disk_rva = disk_image.exports[k].rva;
-                                h->original_addr = dll_base + disk_rva;
-                                h->restorable = !image.is_packed;
+                /* Resolve original address and bytes from cached on-disk DLL */
+                if (have_disk && h->function_name[0] != '\0') {
+                    for (int k = 0; k < disk_image.export_count; k++) {
+                        if (strcmp(disk_image.exports[k].name, h->function_name) == 0) {
+                            uintptr_t disk_rva = disk_image.exports[k].rva;
+                            h->original_addr = dll_base + disk_rva;
+                            h->restorable = !image.is_packed;
 
-                                /* Read original bytes from on-disk */
-                                uint32_t disk_offset;
-                                if (pe_rva_to_offset(&disk_image, disk_rva, &disk_offset) == 0 &&
-                                    disk_offset + sizeof(h->original_bytes) <= disk_size) {
-                                    memcpy(h->original_bytes, disk_data + disk_offset, sizeof(h->original_bytes));
-                                    h->original_byte_count = sizeof(h->original_bytes);
-                                }
-                                break;
+                            /* Read original bytes from on-disk */
+                            uint32_t disk_offset;
+                            if (pe_rva_to_offset(&disk_image, disk_rva, &disk_offset) == 0 &&
+                                disk_offset + sizeof(h->original_bytes) <= disk_size) {
+                                memcpy(h->original_bytes, disk_data + disk_offset, sizeof(h->original_bytes));
+                                h->original_byte_count = sizeof(h->original_bytes);
                             }
+                            if (h->original_byte_count == 0)
+                                h->restorable = false;
+                            break;
                         }
-                        pe_unmap_disk_image(disk_data, disk_size);
-                        pe_free(&disk_image);
                     }
                 }
 
                 /* Read hooked bytes at the target address */
+                SIZE_T hooked_read = 0;
                 ReadProcessMemory(process, (LPCVOID)func_ptr,
                                   h->hooked_bytes, sizeof(h->hooked_bytes),
-                                  (SIZE_T*)&h->hooked_byte_count);
+                                  &hooked_read);
+                h->hooked_byte_count = (int)(hooked_read > sizeof(h->hooked_bytes) ? sizeof(h->hooked_bytes) : hooked_read);
 
                 found++;
             }
+        }
+
+        if (have_disk) {
+            pe_unmap_disk_image(disk_data, disk_size);
+            pe_free(&disk_image);
         }
     }
 

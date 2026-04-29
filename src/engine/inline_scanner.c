@@ -119,6 +119,10 @@ int inline_scan_module(HANDLE process, const module_info_t* mod,
         if (!ReadProcessMemory(process, (LPCVOID)(ordinals_addr + i * 2), &ordinal, 2, NULL))
             continue;
 
+        /* Validate ordinal against NumberOfFunctions to prevent OOB */
+        if (ordinal >= exp_dir.NumberOfFunctions)
+            continue;
+
         uint32_t mem_func_rva;
         if (!ReadProcessMemory(process, (LPCVOID)(functions_addr + ordinal * 4), &mem_func_rva, 4, NULL))
             continue;
@@ -221,6 +225,9 @@ int inline_scan_module(HANDLE process, const module_info_t* mod,
             int orig_len = ((int)(disk_size - disk_offset) < 16) ? (int)(disk_size - disk_offset) : 16;
             memcpy(h->original_bytes, disk_bytes, orig_len);
             h->original_byte_count = orig_len;
+
+            if (h->original_byte_count == 0)
+                h->restorable = false;
 
             found++;
         }

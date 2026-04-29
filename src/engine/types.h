@@ -72,5 +72,6 @@ typedef struct {
 #define ENGINE_WRITE_ERROR      -4
 #define ENGINE_PACKED_DLL       -5
 #define ENGINE_NO_MEMORY        -6
+#define ENGINE_SCAN_FAILED      -7
 
 #endif /* HOOKSCAN_TYPES_H */

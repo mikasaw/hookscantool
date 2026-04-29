@@ -82,8 +82,11 @@ hook_report_t* engine_scan_process(uint32_t pid)
 
         /* Grow hooks array if needed */
         if (report->hook_count + 32 >= hook_cap) {
+            if (hook_cap > INT_MAX / 2) break;
             int new_cap = hook_cap * 2;
-            hook_entry_t* new_hooks = (hook_entry_t*)realloc(report->hooks, new_cap * sizeof(hook_entry_t));
+            size_t alloc_size = (size_t)new_cap * sizeof(hook_entry_t);
+            if (alloc_size / sizeof(hook_entry_t) != (size_t)new_cap) break;
+            hook_entry_t* new_hooks = (hook_entry_t*)realloc(report->hooks, alloc_size);
             if (!new_hooks) break;
             hook_cap = new_cap;
             report->hooks = new_hooks;
@@ -148,7 +151,18 @@ int engine_scan_module(uint32_t pid, const module_info_t* mod,
 
     process_info_t pinfo;
     memset(&pinfo, 0, sizeof(pinfo));
-    if (process_get_info(pid, &pinfo) != 0) {
+
+    bool is_wow64 = wow64_is_process(process);
+
+    int mod_result;
+    if (is_wow64) {
+        mod_result = wow64_enum_modules(pid, &pinfo);
+        pinfo.pid = pid;
+    } else {
+        mod_result = process_get_info(pid, &pinfo);
+    }
+
+    if (mod_result != 0) {
         CloseHandle(process);
         return -1;
     }
@@ -239,13 +253,17 @@ int engine_report_to_json(const hook_report_t* report, const char* path)
 
         /* Original bytes */
         fprintf(f, "      \"original_bytes\": \"");
-        for (int b = 0; b < h->original_byte_count; b++)
+        int obc = h->original_byte_count;
+        if (obc > (int)sizeof(h->original_bytes)) obc = (int)sizeof(h->original_bytes);
+        for (int b = 0; b < obc; b++)
             fprintf(f, "%02X", h->original_bytes[b]);
         fprintf(f, "\",\n");
 
         /* Hooked bytes */
         fprintf(f, "      \"hooked_bytes\": \"");
-        for (int b = 0; b < h->hooked_byte_count; b++)
+        int hbc = h->hooked_byte_count;
+        if (hbc > (int)sizeof(h->hooked_bytes)) hbc = (int)sizeof(h->hooked_bytes);
+        for (int b = 0; b < hbc; b++)
             fprintf(f, "%02X", h->hooked_bytes[b]);
         fprintf(f, "\",\n");
 

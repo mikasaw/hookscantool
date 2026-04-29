@@ -16,8 +16,10 @@ static int read_string_at_rva(const uint8_t* data, size_t size,
 
     const char* src = (const char*)(data + file_offset);
     int i;
-    for (i = 0; i < out_size - 1 && src[i] != '\0'; i++) {
+    for (i = 0; i < out_size - 1; i++) {
         if (file_offset + i >= size)
+            break;
+        if (src[i] == '\0')
             break;
         out[i] = src[i];
     }
@@ -51,6 +53,9 @@ int pe_parse_from_memory(const uint8_t* data, size_t size, pe_image_t* image)
 
     /* Read only the actual optional header size, zero-fill the rest */
     size_t opt_hdr_size = file_hdr.SizeOfOptionalHeader;
+    if (opt_hdr_size != sizeof(IMAGE_OPTIONAL_HEADER32) &&
+        opt_hdr_size != sizeof(IMAGE_OPTIONAL_HEADER64))
+        return -1;
     size_t nt_total = sizeof(signature) + sizeof(file_hdr) + opt_hdr_size;
     if (nt_offset + nt_total > size)
         return -1;
@@ -136,6 +141,10 @@ int pe_parse_from_memory(const uint8_t* data, size_t size, pe_image_t* image)
                         } else {
                             continue;
                         }
+
+                        /* Validate ordinal against NumberOfFunctions */
+                        if (ordinal >= exp_dir.NumberOfFunctions)
+                            continue;
 
                         /* Read function RVA */
                         uint32_t func_rva;
@@ -243,6 +252,9 @@ int pe_parse_from_process(HANDLE process, uintptr_t base_addr, pe_image_t* image
      * is shorter, but IMAGE_NT_HEADERS uses the 64-bit layout. We read the
      * actual size and zero-fill the rest. */
     size_t opt_hdr_size = file_hdr.SizeOfOptionalHeader;
+    if (opt_hdr_size != sizeof(IMAGE_OPTIONAL_HEADER32) &&
+        opt_hdr_size != sizeof(IMAGE_OPTIONAL_HEADER64))
+        return -1;
     size_t nt_total = sizeof(signature) + sizeof(file_hdr) + opt_hdr_size;
     uint8_t* nt_buf = (uint8_t*)calloc(1, sizeof(IMAGE_NT_HEADERS));
     if (!nt_buf) return -1;
@@ -308,7 +320,14 @@ int pe_parse_from_disk(const char* path, uint8_t** mapped_data, size_t* mapped_s
         return -1;
     }
 
-    *mapped_size = GetFileSize(file, NULL);
+    LARGE_INTEGER file_size;
+    if (!GetFileSizeEx(file, &file_size)) {
+        UnmapViewOfFile(*mapped_data);
+        CloseHandle(mapping);
+        CloseHandle(file);
+        return -1;
+    }
+    *mapped_size = (size_t)file_size.QuadPart;
     CloseHandle(mapping);
     CloseHandle(file);
 
@@ -333,12 +352,13 @@ int pe_rva_to_offset(const pe_image_t* image, uintptr_t rva, uint32_t* offset)
     for (int i = 0; i < image->section_count; i++) {
         uintptr_t va = image->sections[i].virtual_address;
         uint32_t  vs = image->sections[i].virtual_size;
-        if (rva >= va && rva < va + vs) {
-            uint32_t off = (uint32_t)(rva - va + image->sections[i].raw_offset);
-            /* Verify the offset falls within the section's raw data */
-            if (image->sections[i].raw_size > 0 && off >= image->sections[i].raw_offset + image->sections[i].raw_size)
+        uint32_t  rs = image->sections[i].raw_size;
+        if (rva >= va && vs > 0 && rva - va < vs) {
+            uint32_t offset_within = (uint32_t)(rva - va);
+            /* RVA is in virtual-only space (beyond raw data) */
+            if (rs == 0 || offset_within >= rs)
                 return -1;
-            *offset = off;
+            *offset = image->sections[i].raw_offset + offset_within;
             return 0;
         }
     }

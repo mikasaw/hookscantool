@@ -42,7 +42,12 @@ void ui_restore_render(uint32_t pid, hook_report_t* report, int selected_hook)
             ImGui::Separator();
 
             if (ImGui::Button("Yes, Restore")) {
-                g_restore_result = engine_restore_hook(pid, (hook_entry_t*)h);
+                hook_entry_t local_entry = *h;
+                g_restore_result = engine_restore_hook(pid, &local_entry);
+                if (g_restore_result) {
+                    /* Mark the shared entry as no longer restorable so UI updates */
+                    const_cast<hook_entry_t*>(h)->restorable = false;
+                }
                 g_show_result = true;
                 g_confirm_open = false;
             }
