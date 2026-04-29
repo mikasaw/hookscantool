@@ -19,28 +19,6 @@ static bool find_module_range(const process_info_t* pinfo,
     return false;
 }
 
-/* Find the on-disk export RVA for a function in a DLL */
-static uintptr_t find_disk_export_rva(const char* dll_path, const char* func_name)
-{
-    uint8_t* disk_data = NULL;
-    size_t   disk_size = 0;
-    pe_image_t disk_image;
-    if (pe_parse_from_disk(dll_path, &disk_data, &disk_size, &disk_image) != 0)
-        return 0;
-
-    uintptr_t rva = 0;
-    for (int j = 0; j < disk_image.export_count; j++) {
-        if (strcmp(disk_image.exports[j].name, func_name) == 0) {
-            rva = disk_image.exports[j].rva;
-            break;
-        }
-    }
-
-    pe_unmap_disk_image(disk_data, disk_size);
-    pe_free(&disk_image);
-    return rva;
-}
-
 int iat_scan_module(HANDLE process, uint32_t pid, const module_info_t* mod,
                     const process_info_t* pinfo,
                     hook_entry_t* hooks, int hook_cap)
@@ -117,46 +95,53 @@ int iat_scan_module(HANDLE process, uint32_t pid, const module_info_t* mod,
                 h->current_addr = func_ptr;
                 h->restorable = !image.is_packed;
 
+                h->restorable = false;
+
                 /* Try to read the function name from OriginalFirstThunk */
                 if (oft_rva != 0) {
                     uintptr_t oft_addr = mod->base_addr + oft_rva + j * thunk_size;
-                    uintptr_t name_rva = 0;
-                    if (ReadProcessMemory(process, (LPCVOID)oft_addr, &name_rva, (SIZE_T)thunk_size, NULL) && name_rva != 0) {
-                        /* Bit 31 set means import by ordinal */
-                        if (!(name_rva & 0x80000000)) {
-                            /* Read hint + name */
-                            uintptr_t name_addr = mod->base_addr + (name_rva & 0x7FFFFFFF) + 2;
+                    uintptr_t thunk_val = 0;
+                    if (ReadProcessMemory(process, (LPCVOID)oft_addr, &thunk_val, (SIZE_T)thunk_size, NULL) && thunk_val != 0) {
+                        uintptr_t ordinal_flag = image.is_64bit ? 0x8000000000000000ULL : 0x80000000UL;
+                        if (!(thunk_val & ordinal_flag)) {
+                            /* Import by name: low 32 bits are the hint/name RVA */
+                            uint32_t name_rva_32 = (uint32_t)thunk_val;
+                            uintptr_t name_addr = mod->base_addr + name_rva_32 + 2;
                             char fname[128] = {0};
                             ReadProcessMemory(process, (LPCVOID)name_addr, fname, sizeof(fname) - 1, NULL);
                             strncpy(h->function_name, fname, sizeof(h->function_name) - 1);
                         } else {
                             snprintf(h->function_name, sizeof(h->function_name), "Ordinal_%u",
-                                     (unsigned)(name_rva & 0xFFFF));
+                                     (unsigned)(thunk_val & 0xFFFF));
                         }
                     }
                 }
 
-                /* Resolve original address from on-disk DLL export */
+                /* Resolve original address and bytes from on-disk DLL (single parse) */
                 if (dll_path && h->function_name[0] != '\0') {
-                    uintptr_t disk_rva = find_disk_export_rva(dll_path, h->function_name);
-                    if (disk_rva != 0) {
-                        h->original_addr = dll_base + disk_rva;
-                        h->restorable = !image.is_packed;
+                    uint8_t* disk_data = NULL;
+                    size_t   disk_size = 0;
+                    pe_image_t disk_image;
+                    if (pe_parse_from_disk(dll_path, &disk_data, &disk_size, &disk_image) == 0) {
+                        /* Find the export RVA */
+                        for (int k = 0; k < disk_image.export_count; k++) {
+                            if (strcmp(disk_image.exports[k].name, h->function_name) == 0) {
+                                uintptr_t disk_rva = disk_image.exports[k].rva;
+                                h->original_addr = dll_base + disk_rva;
+                                h->restorable = !image.is_packed;
 
-                        /* Read original bytes from on-disk */
-                        uint8_t* disk_data = NULL;
-                        size_t   disk_size = 0;
-                        pe_image_t disk_image;
-                        if (pe_parse_from_disk(dll_path, &disk_data, &disk_size, &disk_image) == 0) {
-                            uint32_t disk_offset;
-                            if (pe_rva_to_offset(&disk_image, disk_rva, &disk_offset) == 0 &&
-                                disk_offset + sizeof(h->original_bytes) <= disk_size) {
-                                memcpy(h->original_bytes, disk_data + disk_offset, sizeof(h->original_bytes));
-                                h->original_byte_count = sizeof(h->original_bytes);
+                                /* Read original bytes from on-disk */
+                                uint32_t disk_offset;
+                                if (pe_rva_to_offset(&disk_image, disk_rva, &disk_offset) == 0 &&
+                                    disk_offset + sizeof(h->original_bytes) <= disk_size) {
+                                    memcpy(h->original_bytes, disk_data + disk_offset, sizeof(h->original_bytes));
+                                    h->original_byte_count = sizeof(h->original_bytes);
+                                }
+                                break;
                             }
-                            pe_unmap_disk_image(disk_data, disk_size);
-                            pe_free(&disk_image);
                         }
+                        pe_unmap_disk_image(disk_data, disk_size);
+                        pe_free(&disk_image);
                     }
                 }
 

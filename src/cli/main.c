@@ -59,21 +59,50 @@ int main(int argc, char* argv[])
         return 0;
     }
 
-    uint32_t pid = (uint32_t)atoi(argv[1]);
-    if (pid == 0) {
-        printf("Invalid PID: %s\n", argv[1]);
-        return 1;
-    }
-
     const char* json_path = NULL;
     int restore_idx = -1;
+    uint32_t pid = 0;
 
-    for (int i = 2; i < argc; i++) {
-        if (strcmp(argv[i], "--json") == 0 && i + 1 < argc) {
+    for (int i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "--help") == 0) {
+            print_usage(argv[0]);
+            return 0;
+        } else if (strcmp(argv[i], "--list") == 0) {
+            list_processes();
+            return 0;
+        } else if (strcmp(argv[i], "--json") == 0 && i + 1 < argc) {
             json_path = argv[++i];
         } else if (strcmp(argv[i], "--restore") == 0 && i + 1 < argc) {
-            restore_idx = atoi(argv[++i]);
+            char* endp_r = NULL;
+            long val = strtol(argv[++i], &endp_r, 10);
+            if (*endp_r != '\0' || val < 0) {
+                printf("Invalid restore index: %s\n", argv[i]);
+                return 1;
+            }
+            restore_idx = (int)val;
+        } else {
+            char* endp = NULL;
+            if (argv[i][0] == '-') {
+                printf("Unknown option: %s\n", argv[i]);
+                return 1;
+            }
+            uint32_t p = (uint32_t)strtoul(argv[i], &endp, 10);
+            if (p != 0 && *endp == '\0') {
+                if (pid != 0) {
+                    printf("Multiple PIDs specified. Only one PID is allowed.\n");
+                    return 1;
+                }
+                pid = p;
+            } else {
+                printf("Invalid PID: %s\n", argv[i]);
+                return 1;
+            }
         }
+    }
+
+    if (pid == 0) {
+        print_usage(argv[0]);
+        return 1;
     }
 
     printf("Scanning PID %u...\n", pid);

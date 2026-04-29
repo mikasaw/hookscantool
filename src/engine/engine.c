@@ -82,9 +82,10 @@ hook_report_t* engine_scan_process(uint32_t pid)
 
         /* Grow hooks array if needed */
         if (report->hook_count + 32 >= hook_cap) {
-            hook_cap *= 2;
-            hook_entry_t* new_hooks = (hook_entry_t*)realloc(report->hooks, hook_cap * sizeof(hook_entry_t));
+            int new_cap = hook_cap * 2;
+            hook_entry_t* new_hooks = (hook_entry_t*)realloc(report->hooks, new_cap * sizeof(hook_entry_t));
             if (!new_hooks) break;
+            hook_cap = new_cap;
             report->hooks = new_hooks;
             memset(report->hooks + report->hook_count, 0,
                    (hook_cap - report->hook_count) * sizeof(hook_entry_t));
@@ -180,6 +181,27 @@ bool engine_restore_hook(uint32_t pid, hook_entry_t* entry)
     return result;
 }
 
+/* Write a JSON-escaped string to file */
+static void json_write_string(FILE* f, const char* s)
+{
+    fputc('"', f);
+    for (; *s; s++) {
+        switch (*s) {
+            case '"':  fputs("\\\"", f); break;
+            case '\\': fputs("\\\\", f); break;
+            case '\n': fputs("\\n", f);  break;
+            case '\r': fputs("\\r", f);  break;
+            case '\t': fputs("\\t", f);  break;
+            default:
+                if ((unsigned char)*s < 0x20)
+                    fprintf(f, "\\u%04X", (unsigned char)*s);
+                else
+                    fputc(*s, f);
+        }
+    }
+    fputc('"', f);
+}
+
 int engine_report_to_json(const hook_report_t* report, const char* path)
 {
     if (!report || !path) return -1;
@@ -189,7 +211,9 @@ int engine_report_to_json(const hook_report_t* report, const char* path)
 
     fprintf(f, "{\n");
     fprintf(f, "  \"pid\": %u,\n", report->pid);
-    fprintf(f, "  \"process_name\": \"%s\",\n", report->process_name);
+    fprintf(f, "  \"process_name\": ");
+    json_write_string(f, report->process_name);
+    fprintf(f, ",\n");
     fprintf(f, "  \"hook_count\": %d,\n", report->hook_count);
     fprintf(f, "  \"modules_scanned\": %d,\n", report->modules_scanned);
     fprintf(f, "  \"scan_time_ms\": %llu,\n", (unsigned long long)report->scan_time_ms);
@@ -201,8 +225,12 @@ int engine_report_to_json(const hook_report_t* report, const char* path)
                                (h->type == HOOK_INLINE) ? "INLINE" : "EAT";
 
         fprintf(f, "    {\n");
-        fprintf(f, "      \"module\": \"%s\",\n", h->module_name);
-        fprintf(f, "      \"function\": \"%s\",\n", h->function_name);
+        fprintf(f, "      \"module\": ");
+        json_write_string(f, h->module_name);
+        fprintf(f, ",\n");
+        fprintf(f, "      \"function\": ");
+        json_write_string(f, h->function_name);
+        fprintf(f, ",\n");
         fprintf(f, "      \"type\": \"%s\",\n", type_str);
         fprintf(f, "      \"original_addr\": \"0x%016llX\",\n", (unsigned long long)h->original_addr);
         fprintf(f, "      \"current_addr\": \"0x%016llX\",\n", (unsigned long long)h->current_addr);
@@ -224,10 +252,9 @@ int engine_report_to_json(const hook_report_t* report, const char* path)
         fprintf(f, "      \"chain\": [\n");
 
         for (int j = 0; j < h->chain_depth; j++) {
-            fprintf(f, "        {\"address\": \"0x%016llX\", \"disasm\": \"%s\"}%s\n",
-                    (unsigned long long)h->chain[j].address,
-                    h->chain[j].disasm,
-                    (j < h->chain_depth - 1) ? "," : "");
+            fprintf(f, "        {\"address\": \"0x%016llX\", \"disasm\": ", (unsigned long long)h->chain[j].address);
+            json_write_string(f, h->chain[j].disasm);
+            fprintf(f, "}%s\n", (j < h->chain_depth - 1) ? "," : "");
         }
 
         fprintf(f, "      ]\n");

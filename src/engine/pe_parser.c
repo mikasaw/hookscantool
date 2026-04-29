@@ -37,20 +37,34 @@ int pe_parse_from_memory(const uint8_t* data, size_t size, pe_image_t* image)
         return -1;
 
     uintptr_t nt_offset = image->dos_header.e_lfanew;
-    if (nt_offset + sizeof(IMAGE_NT_HEADERS) > size)
+    /* Read signature and file header first */
+    if (nt_offset + sizeof(uint32_t) + sizeof(IMAGE_FILE_HEADER) > size)
         return -1;
 
-    memcpy(&image->nt_headers, data + nt_offset, sizeof(IMAGE_NT_HEADERS));
-    if (image->nt_headers.Signature != IMAGE_NT_SIGNATURE)
+    uint32_t signature;
+    memcpy(&signature, data + nt_offset, sizeof(signature));
+    if (signature != IMAGE_NT_SIGNATURE)
         return -1;
+
+    IMAGE_FILE_HEADER file_hdr;
+    memcpy(&file_hdr, data + nt_offset + sizeof(signature), sizeof(file_hdr));
+
+    /* Read only the actual optional header size, zero-fill the rest */
+    size_t opt_hdr_size = file_hdr.SizeOfOptionalHeader;
+    size_t nt_total = sizeof(signature) + sizeof(file_hdr) + opt_hdr_size;
+    if (nt_offset + nt_total > size)
+        return -1;
+
+    /* Copy into nt_headers, handling shorter 32-bit optional headers */
+    memcpy(&image->nt_headers, data + nt_offset,
+           nt_total > sizeof(IMAGE_NT_HEADERS) ? sizeof(IMAGE_NT_HEADERS) : nt_total);
 
     image->is_64bit = (image->nt_headers.OptionalHeader.Magic == IMAGE_NT_OPTIONAL_HDR64_MAGIC);
 
     /* Parse sections */
-    IMAGE_FILE_HEADER* file_hdr = &image->nt_headers.FileHeader;
-    int sec_count = file_hdr->NumberOfSections;
+    int sec_count = file_hdr.NumberOfSections;
     uintptr_t sec_offset = nt_offset + sizeof(uint32_t) + sizeof(IMAGE_FILE_HEADER)
-                         + file_hdr->SizeOfOptionalHeader;
+                         + file_hdr.SizeOfOptionalHeader;
 
     image->sections = (pe_section_t*)calloc(sec_count, sizeof(pe_section_t));
     if (!image->sections) return -1;
@@ -116,9 +130,11 @@ int pe_parse_from_memory(const uint8_t* data, size_t size, pe_image_t* image)
                         }
 
                         /* Read ordinal */
-                        uint16_t ordinal;
+                        uint16_t ordinal = 0;
                         if (ordinals_off + i * 2 + 2 <= size) {
                             memcpy(&ordinal, data + ordinals_off + i * 2, 2);
+                        } else {
+                            continue;
                         }
 
                         /* Read function RVA */
