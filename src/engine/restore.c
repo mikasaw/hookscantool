@@ -68,6 +68,11 @@ static void resume_threads(HANDLE* threads, int count)
 
 bool restore_hook(HANDLE process, uint32_t pid, hook_entry_t* entry)
 {
+    if (!entry) return false;
+    if (entry->original_byte_count == 0 || entry->original_byte_count > (int)sizeof(entry->original_bytes))
+        return false;
+    if (entry->hooked_byte_count == 0 || entry->hooked_byte_count > (int)sizeof(entry->hooked_bytes))
+        return false;
     if (!entry->restorable || entry->original_byte_count <= 0)
         return false;
 

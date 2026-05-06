@@ -155,11 +155,18 @@ int main(int argc, char* argv[])
     /* Restore a hook if requested */
     if (restore_idx >= 0 && restore_idx < report->hook_count) {
         hook_entry_t* h = &report->hooks[restore_idx];
-        printf("\nRestoring hook #%d (%s!%s)...\n", restore_idx, h->module_name, h->function_name);
-        if (engine_restore_hook(pid, h)) {
-            printf("Hook restored successfully.\n");
+        printf("\nRestore hook #%d (%s!%s) in PID %u? [y/N] ",
+               restore_idx, h->module_name, h->function_name, pid);
+        fflush(stdout);
+        char answer[8] = {0};
+        if (fgets(answer, sizeof(answer), stdin) && (answer[0] == 'y' || answer[0] == 'Y')) {
+            if (engine_restore_hook(pid, h)) {
+                printf("Hook restored successfully.\n");
+            } else {
+                printf("Failed to restore hook.\n");
+            }
         } else {
-            printf("Failed to restore hook.\n");
+            printf("Aborted.\n");
         }
     }
 
