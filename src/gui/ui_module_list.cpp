@@ -200,11 +200,13 @@ uint32_t ui_module_list_render(uint32_t selected_pid, bool scanning)
         }
     }
 
-    /* Snapshot recon pointer under mutex for this frame */
+    /* Snapshot recon pointer and checked state under mutex for this frame */
     module_report_t* recon = nullptr;
+    std::vector<bool> checked_snap;
     {
         std::lock_guard<std::mutex> lock(g_recon_mutex);
         recon = g_recon;
+        checked_snap = g_checked;
     }
 
     /* --- Error state --- */
@@ -246,17 +248,21 @@ uint32_t ui_module_list_render(uint32_t selected_pid, bool scanning)
 
     ImGui::SameLine();
     if (ImGui::Button("Select All")) {
-        g_checked.assign(recon->module_count, true);
+        checked_snap.assign(recon->module_count, true);
+        std::lock_guard<std::mutex> lock(g_recon_mutex);
+        g_checked = checked_snap;
     }
     ImGui::SameLine();
     if (ImGui::Button("Deselect All")) {
-        g_checked.assign(recon->module_count, false);
+        checked_snap.assign(recon->module_count, false);
+        std::lock_guard<std::mutex> lock(g_recon_mutex);
+        g_checked = checked_snap;
     }
 
     /* --- Scan Selected button --- */
     int checked_count = 0;
-    for (int i = 0; i < (int)g_checked.size() && i < recon->module_count; i++) {
-        if (g_checked[i]) checked_count++;
+    for (int i = 0; i < (int)checked_snap.size() && i < recon->module_count; i++) {
+        if (checked_snap[i]) checked_count++;
     }
 
     bool can_scan = checked_count > 0 && !scanning && !g_sel_scanning.load() && !g_recon_active.load();
@@ -267,8 +273,8 @@ uint32_t ui_module_list_render(uint32_t selected_pid, bool scanning)
 
         /* Build index array of checked modules */
         std::vector<int> indices;
-        for (int i = 0; i < (int)g_checked.size() && i < recon->module_count; i++) {
-            if (g_checked[i]) indices.push_back(i);
+        for (int i = 0; i < (int)checked_snap.size() && i < recon->module_count; i++) {
+            if (checked_snap[i]) indices.push_back(i);
         }
 
         uint32_t scan_pid = selected_pid;
@@ -399,12 +405,15 @@ uint32_t ui_module_list_render(uint32_t selected_pid, bool scanning)
 
             /* Checkbox */
             if (ImGui::TableSetColumnIndex(0)) {
-                bool checked = (i < (int)g_checked.size()) ? g_checked[i] : false;
+                bool checked = (i < (int)checked_snap.size()) ? checked_snap[i] : false;
                 char cb_label[32];
                 snprintf(cb_label, sizeof(cb_label), "##cb%d", i);
                 if (ImGui::Checkbox(cb_label, &checked)) {
-                    if (i < (int)g_checked.size())
+                    if (i < (int)checked_snap.size()) {
+                        checked_snap[i] = checked;
+                        std::lock_guard<std::mutex> lock(g_recon_mutex);
                         g_checked[i] = checked;
+                    }
                 }
             }
 

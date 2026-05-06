@@ -106,7 +106,9 @@ bool restore_hook(HANDLE process, uint32_t pid, hook_entry_t* entry)
                           &current_read);
     }
     if (current_read != (SIZE_T)entry->original_byte_count ||
-        memcmp(current_bytes, entry->hooked_bytes, entry->original_byte_count) != 0) {
+        memcmp(current_bytes, entry->hooked_bytes,
+               (size_t)(entry->original_byte_count < entry->hooked_byte_count ?
+                        entry->original_byte_count : entry->hooked_byte_count)) != 0) {
         /* Hook bytes changed since scan — abort to avoid corrupting code */
         VirtualProtectEx(process, (LPVOID)entry->current_addr,
                          entry->original_byte_count, old_protect, &old_protect);

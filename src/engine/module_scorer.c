@@ -3,21 +3,32 @@
 #include <string.h>
 #include <ctype.h>
 
-/* Cached system paths (initialized once) */
+/* Cached system paths (initialized once, thread-safe via SRWLOCK) */
 static char g_windows_dir[MAX_PATH] = {0};
 static char g_program_files_dir[MAX_PATH] = {0};
 static char g_program_files_x86_dir[MAX_PATH] = {0};
 static bool g_paths_initialized = false;
+static SRWLOCK g_paths_lock = SRWLOCK_INIT;
 
 static void ensure_paths_initialized(void)
 {
-    if (g_paths_initialized) return;
+    AcquireSRWLockShared(&g_paths_lock);
+    if (g_paths_initialized) {
+        ReleaseSRWLockShared(&g_paths_lock);
+        return;
+    }
+    ReleaseSRWLockShared(&g_paths_lock);
 
+    AcquireSRWLockExclusive(&g_paths_lock);
+    if (g_paths_initialized) {
+        ReleaseSRWLockExclusive(&g_paths_lock);
+        return;
+    }
     GetWindowsDirectoryA(g_windows_dir, MAX_PATH);
     GetEnvironmentVariableA("ProgramFiles", g_program_files_dir, MAX_PATH);
     GetEnvironmentVariableA("ProgramFiles(x86)", g_program_files_x86_dir, MAX_PATH);
-
     g_paths_initialized = true;
+    ReleaseSRWLockExclusive(&g_paths_lock);
 }
 
 static const char* stristr(const char* haystack, const char* needle)
