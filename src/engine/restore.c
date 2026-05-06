@@ -41,17 +41,10 @@ static HANDLE* suspend_threads(uint32_t pid, int* count)
         int i = 0;
         do {
             if (te.th32OwnerProcessID == pid && i < total) {
-                HANDLE t = OpenThread(THREAD_SUSPEND_RESUME | THREAD_GET_CONTEXT,
+                HANDLE t = OpenThread(THREAD_SUSPEND_RESUME,
                                       FALSE, te.th32ThreadID);
                 if (t) {
                     SuspendThread(t);
-                    /* Force the kernel to wait until the thread is actually
-                     * suspended. Without this, SuspendThread is asynchronous
-                     * and the thread may still be executing when we write. */
-                    CONTEXT ctx;
-                    memset(&ctx, 0, sizeof(ctx));
-                    ctx.ContextFlags = CONTEXT_CONTROL;
-                    GetThreadContext(t, &ctx);
                     threads[i++] = t;
                 }
             }
@@ -75,7 +68,7 @@ static void resume_threads(HANDLE* threads, int count)
 
 bool restore_hook(HANDLE process, uint32_t pid, hook_entry_t* entry)
 {
-    if (!entry->restorable || entry->original_byte_count == 0)
+    if (!entry->restorable || entry->original_byte_count <= 0)
         return false;
 
     /* Suspend threads to prevent execution of partially-written code */
@@ -93,7 +86,26 @@ bool restore_hook(HANDLE process, uint32_t pid, hook_entry_t* entry)
     if (!VirtualProtectEx(process, (LPVOID)entry->current_addr,
                           entry->original_byte_count,
                           PAGE_EXECUTE_READWRITE, &old_protect)) {
-        if (threads) resume_threads(threads, thread_count);
+        resume_threads(threads, thread_count);
+        return false;
+    }
+
+    /* Re-read current bytes and verify the hook is still present (TOCTOU check).
+     * Another thread could have restored or modified the bytes between the scan
+     * and now. Writing original bytes over a different hook would corrupt code. */
+    uint8_t current_bytes[64];
+    SIZE_T current_read = 0;
+    if (entry->original_byte_count <= (int)sizeof(current_bytes)) {
+        ReadProcessMemory(process, (LPVOID)entry->current_addr,
+                          current_bytes, (SIZE_T)entry->original_byte_count,
+                          &current_read);
+    }
+    if (current_read != (SIZE_T)entry->original_byte_count ||
+        memcmp(current_bytes, entry->hooked_bytes, entry->original_byte_count) != 0) {
+        /* Hook bytes changed since scan — abort to avoid corrupting code */
+        VirtualProtectEx(process, (LPVOID)entry->current_addr,
+                         entry->original_byte_count, old_protect, &old_protect);
+        resume_threads(threads, thread_count);
         return false;
     }
 
@@ -113,7 +125,7 @@ bool restore_hook(HANDLE process, uint32_t pid, hook_entry_t* entry)
                           (SIZE_T)entry->original_byte_count);
 
     /* Resume threads */
-    if (threads) resume_threads(threads, thread_count);
+    resume_threads(threads, thread_count);
 
     if (!write_ok || written != (SIZE_T)entry->original_byte_count)
         return false;

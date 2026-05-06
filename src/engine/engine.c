@@ -220,7 +220,7 @@ int engine_report_to_json(const hook_report_t* report, const char* path)
 {
     if (!report || !path) return -1;
 
-    FILE* f = fopen(path, "w");
+    FILE* f = fopen(path, "wb");
     if (!f) return -1;
 
     fprintf(f, "{\n");

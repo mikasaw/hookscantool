@@ -103,9 +103,6 @@ uint32_t ui_process_tree_render(void)
                 hook_report_t* report = engine_scan_process(scan_pid);
                 {
                     std::lock_guard<std::mutex> lock(g_report_mutex);
-                    if (g_pending_free) {
-                        engine_free_report(g_pending_free);
-                    }
                     g_pending_free = g_last_report;
                     g_last_report = report;
                 }
@@ -140,6 +137,15 @@ uint32_t ui_process_tree_render(void)
     if (g_scanning.load()) {
         ImGui::SameLine();
         ImGui::Text("Scanning...");
+    }
+
+    /* Free deferred report from previous scan (safe: only freed on render thread) */
+    {
+        std::lock_guard<std::mutex> lock(g_report_mutex);
+        if (g_pending_free) {
+            engine_free_report(g_pending_free);
+            g_pending_free = NULL;
+        }
     }
 
     /* Show scan result summary (safe: read pointer under mutex, hold for frame) */

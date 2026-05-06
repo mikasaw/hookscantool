@@ -87,8 +87,9 @@ int main(int argc, char* argv[])
                 printf("Unknown option: %s\n", argv[i]);
                 return 1;
             }
+            errno = 0;
             uint32_t p = (uint32_t)strtoul(argv[i], &endp, 10);
-            if (p != 0 && *endp == '\0') {
+            if (errno != 0 || (p != 0 && *endp == '\0')) {
                 if (pid != 0) {
                     printf("Multiple PIDs specified. Only one PID is allowed.\n");
                     return 1;
