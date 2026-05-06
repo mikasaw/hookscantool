@@ -19,4 +19,10 @@ void ui_process_tree_refresh(void);
  */
 void ui_process_tree_cleanup(void);
 
+/* Check if a scan is currently running */
+bool ui_is_scanning(void);
+
+/* Get the last hook report from full process scan */
+hook_report_t* ui_get_last_report(void);
+
 #endif /* UI_PROCESS_TREE_H */

@@ -1,5 +1,7 @@
 #include "engine.h"
 #include "process.h"
+#include "ui_module_list.h"
+#include "ui_process_tree.h"
 #include <imgui.h>
 #include <imgui_impl_win32.h>
 #include <imgui_impl_dx11.h>
@@ -23,11 +25,7 @@ static void CreateRenderTarget();
 static void CleanupRenderTarget();
 static LRESULT WINAPI WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
 
-/* GUI panel forward declarations (from other ui_*.c files) */
-extern uint32_t ui_process_tree_render(void);
-extern void     ui_process_tree_refresh(void);
-extern void     ui_process_tree_cleanup(void);
-extern hook_report_t* ui_get_last_report(void);
+/* GUI panel forward declarations (from other ui_*.cpp files) */
 extern void     ui_set_last_report(hook_report_t* r);
 extern int      ui_hook_list_render(const hook_report_t* report);
 extern void     ui_chain_view_render(const hook_entry_t* hook);
@@ -116,10 +114,18 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int)
         /* Right area */
         ImGui::BeginChild("RightArea", ImVec2(0, 0), false);
 
-        /* Top-right: Hook list */
-        float top_height = io.DisplaySize.y * 0.55f;
-        ImGui::BeginChild("HookList", ImVec2(0, top_height), true);
-        hook_report_t* report = ui_get_last_report();
+        /* Top-right: Module triage panel (40%) */
+        float module_height = io.DisplaySize.y * 0.40f;
+        ImGui::BeginChild("ModulePanel", ImVec2(0, module_height), true);
+        ui_module_list_render(selected_pid, ui_is_scanning());
+        ImGui::EndChild();
+
+        /* Middle-right: Hook list (30%) */
+        float hook_height = io.DisplaySize.y * 0.30f;
+        ImGui::BeginChild("HookList", ImVec2(0, hook_height), true);
+        /* Merge reports: prefer selective scan report, fall back to full scan */
+        hook_report_t* report = ui_module_get_last_report();
+        if (!report) report = ui_get_last_report();
         selected_hook = ui_hook_list_render(report);
         ImGui::EndChild();
 
@@ -157,6 +163,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int)
     }
 
     /* Cleanup */
+    ui_module_list_cleanup();
     ui_process_tree_cleanup();
     ImGui_ImplDX11_Shutdown();
     ImGui_ImplWin32_Shutdown();

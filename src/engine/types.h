@@ -64,6 +64,24 @@ typedef struct {
     int            module_count;
 } process_info_t;
 
+/* Scored module for triage (embeds module info + suspicion score) */
+typedef struct {
+    module_info_t info;           /* copied, not borrowed */
+    uint8_t       suspicion_score; /* 0-100 */
+} scored_module_t;
+
+/* Recon report: module list with suspicion scores */
+typedef struct {
+    uint32_t         pid;
+    char             process_name[64];
+    scored_module_t* modules;     /* owned array, caller frees via engine_free_module_report */
+    int              module_count;
+    bool             is_64bit;    /* true if host process is 64-bit */
+    uint64_t         recon_time_ms;
+    int              error_code;  /* 0 = success, non-zero = engine error */
+    char             error_msg[128];
+} module_report_t;
+
 /* Engine error codes */
 #define ENGINE_OK                0
 #define ENGINE_ACCESS_DENIED    -1

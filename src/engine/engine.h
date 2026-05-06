@@ -18,6 +18,13 @@ int engine_report_to_json(const hook_report_t* report, const char* path);
 
 void engine_free_report(hook_report_t* report);
 
+module_report_t* engine_recon_process(uint32_t pid);
+
+hook_report_t* engine_scan_modules(uint32_t pid, const module_report_t* recon,
+                                   const int* module_indices, int count);
+
+void engine_free_module_report(module_report_t* report);
+
 #ifdef __cplusplus
 }
 #endif

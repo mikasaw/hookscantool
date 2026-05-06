@@ -181,9 +181,24 @@ uint32_t ui_process_tree_render(void)
     }
 
     if (g_procs) {
+        /* Snapshot process list under mutex so sort/render can't race with refresh */
+        process_info_t* snap_procs = NULL;
+        int snap_count = 0;
+        {
+            std::lock_guard<std::mutex> lock(g_procs_mutex);
+            if (g_procs && g_proc_count > 0) {
+                snap_count = g_proc_count;
+                snap_procs = (process_info_t*)malloc(snap_count * sizeof(process_info_t));
+                if (snap_procs) {
+                    memcpy(snap_procs, g_procs, snap_count * sizeof(process_info_t));
+                }
+            }
+        }
+
+        if (snap_procs && snap_count > 0) {
         /* Build sorted index array */
-        std::vector<int> idx(g_proc_count);
-        for (int i = 0; i < g_proc_count; i++) idx[i] = i;
+        std::vector<int> idx(snap_count);
+        for (int i = 0; i < snap_count; i++) idx[i] = i;
 
         ImGuiTableFlags flags = ImGuiTableFlags_Sortable | ImGuiTableFlags_SortMulti |
                                  ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersOuterH |
@@ -217,27 +232,27 @@ uint32_t ui_process_tree_render(void)
             bool sort_asc = g_sort_asc;
             sort_col_t tiebreak_col = g_tiebreak_col;
             bool tiebreak_asc = g_tiebreak_asc;
-            std::sort(idx.begin(), idx.end(), [sort_col, sort_asc, tiebreak_col, tiebreak_asc](int a, int b) {
+            std::sort(idx.begin(), idx.end(), [sort_col, sort_asc, tiebreak_col, tiebreak_asc, snap_procs](int a, int b) {
                 int r = 0;
                 switch (sort_col) {
-                    case SORT_PID:  r = (g_procs[a].pid < g_procs[b].pid) ? -1 : (g_procs[a].pid > g_procs[b].pid) ? 1 : 0; break;
-                    case SORT_NAME: r = strcmp(g_procs[a].name, g_procs[b].name); break;
+                    case SORT_PID:  r = (snap_procs[a].pid < snap_procs[b].pid) ? -1 : (snap_procs[a].pid > snap_procs[b].pid) ? 1 : 0; break;
+                    case SORT_NAME: r = strcmp(snap_procs[a].name, snap_procs[b].name); break;
                 }
                 if (r != 0) return sort_asc ? r < 0 : r > 0;
                 /* Tiebreak on secondary column */
                 switch (tiebreak_col) {
-                    case SORT_PID:  r = (g_procs[a].pid < g_procs[b].pid) ? -1 : (g_procs[a].pid > g_procs[b].pid) ? 1 : 0; break;
-                    case SORT_NAME: r = strcmp(g_procs[a].name, g_procs[b].name); break;
+                    case SORT_PID:  r = (snap_procs[a].pid < snap_procs[b].pid) ? -1 : (snap_procs[a].pid > snap_procs[b].pid) ? 1 : 0; break;
+                    case SORT_NAME: r = strcmp(snap_procs[a].name, snap_procs[b].name); break;
                 }
                 return tiebreak_asc ? r < 0 : r > 0;
             });
 
-            for (int si = 0; si < g_proc_count; si++) {
+            for (int si = 0; si < snap_count; si++) {
                 int i = idx[si];
-                bool is_selected = (g_procs[i].pid == g_selected_pid);
+                bool is_selected = (snap_procs[i].pid == g_selected_pid);
                 bool has_hooks = false;
 
-                if (report && report->pid == g_procs[i].pid && report->hook_count > 0) {
+                if (report && report->pid == snap_procs[i].pid && report->hook_count > 0) {
                     has_hooks = true;
                 }
 
@@ -245,18 +260,20 @@ uint32_t ui_process_tree_render(void)
                 ImGui::TableSetColumnIndex(0);
                 if (has_hooks) ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.3f, 0.3f, 1.0f));
                 char pid_label[32];
-                snprintf(pid_label, sizeof(pid_label), "%u", g_procs[i].pid);
+                snprintf(pid_label, sizeof(pid_label), "%u", snap_procs[i].pid);
                 if (ImGui::Selectable(pid_label, is_selected, ImGuiSelectableFlags_SpanAllColumns)) {
-                    g_selected_pid = g_procs[i].pid;
+                    g_selected_pid = snap_procs[i].pid;
                 }
                 if (has_hooks) ImGui::PopStyleColor();
 
                 ImGui::TableSetColumnIndex(1);
-                ImGui::Text("%s%s", g_procs[i].name, has_hooks ? " **HOOKED**" : "");
+                ImGui::Text("%s%s", snap_procs[i].name, has_hooks ? " **HOOKED**" : "");
             }
             ImGui::EndTable();
         }
-    }
+        free(snap_procs);
+        } /* end if (snap_procs) */
+    } /* end if (g_procs) */
 
     ImGui::End();
     return g_selected_pid;
@@ -270,4 +287,8 @@ hook_report_t* ui_get_last_report(void) {
 void ui_set_last_report(hook_report_t* r) {
     std::lock_guard<std::mutex> lock(g_report_mutex);
     g_last_report = r;
+}
+
+bool ui_is_scanning(void) {
+    return g_scanning.load();
 }

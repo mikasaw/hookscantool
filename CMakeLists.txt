@@ -28,6 +28,7 @@ add_library(hookscan_engine STATIC
     src/engine/chain_tracer.c
     src/engine/restore.c
     src/engine/wow64.c
+    src/engine/module_scorer.c
     src/engine/engine.c
 )
 target_include_directories(hookscan_engine PUBLIC
@@ -64,6 +65,7 @@ add_executable(hookscantool WIN32
     src/gui/ui_hook_list.cpp
     src/gui/ui_chain_view.cpp
     src/gui/ui_restore.cpp
+    src/gui/ui_module_list.cpp
 )
 target_link_libraries(hookscantool PRIVATE
     hookscan_engine
