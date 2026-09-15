@@ -124,6 +124,18 @@ elseif(CMAKE_C_COMPILER_ID STREQUAL "GNU")
     endif()
 endif()
 
+# --- E2E fixture (opt-in): a target process + DLL that hooks itself ---
+option(HOOKSCAN_BUILD_E2E "Build end-to-end test fixture" OFF)
+if(HOOKSCAN_BUILD_E2E)
+    add_executable(e2e_target test/e2e/target_app.c)
+    add_library(e2e_hook SHARED test/e2e/hook_dll.c)
+    set_target_properties(e2e_hook PROPERTIES OUTPUT_NAME hook_dll)
+    if(MSVC)
+        target_compile_options(e2e_target PRIVATE /W4 /wd4819 /wd4152)
+        target_compile_options(e2e_hook PRIVATE /W4 /wd4819 /wd4152)
+    endif()
+endif()
+
 # --- Test targets ---
 option(HOOKSCAN_BUILD_TESTS "Build unit tests" OFF)
 
