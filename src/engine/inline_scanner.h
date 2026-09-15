@@ -18,6 +18,6 @@
  * Returns:  Number of hooks detected, or -1 on error.
  */
 int inline_scan_module(HANDLE process, const module_info_t* mod,
-                       hook_entry_t* hooks, int hook_cap);
+                       hook_entry_t* hooks, int hook_cap, bool* hit_cap);
 
 #endif /* INLINE_SCANNER_H */

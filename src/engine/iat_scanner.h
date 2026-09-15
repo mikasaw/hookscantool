@@ -19,6 +19,6 @@
  */
 int iat_scan_module(HANDLE process, uint32_t pid, const module_info_t* mod,
                     const process_info_t* pinfo,
-                    hook_entry_t* hooks, int hook_cap);
+                    hook_entry_t* hooks, int hook_cap, bool* hit_cap);
 
 #endif /* IAT_SCANNER_H */

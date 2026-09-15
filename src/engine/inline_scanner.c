@@ -112,8 +112,9 @@ bool test_instructions_match(const ZydisDecodedInstruction* a,
 #endif
 
 int inline_scan_module(HANDLE process, const module_info_t* mod,
-                       hook_entry_t* hooks, int hook_cap)
+                       hook_entry_t* hooks, int hook_cap, bool* hit_cap)
 {
+    if (hit_cap) *hit_cap = false;
     int found = 0;
 
     pe_image_t mem_image;
@@ -164,7 +165,7 @@ int inline_scan_module(HANDLE process, const module_info_t* mod,
     uintptr_t ordinals_addr = mod->base_addr + exp_dir.AddressOfNameOrdinals;
     uintptr_t functions_addr = mod->base_addr + exp_dir.AddressOfFunctions;
 
-    for (uint32_t i = 0; i < name_count && found < hook_cap; i++) {
+    for (uint32_t i = 0; i < name_count; i++) {
         uint32_t name_rva;
         if (!ReadProcessMemory(process, (LPCVOID)(names_addr + i * 4), &name_rva, 4, NULL))
             continue;
@@ -445,6 +446,10 @@ int inline_scan_module(HANDLE process, const module_info_t* mod,
         }
 
         if (is_hooked) {
+            if (found >= hook_cap) {
+                if (hit_cap) *hit_cap = true;
+                break;
+            }
             hook_entry_t* h = &hooks[found];
             memset(h, 0, sizeof(*h));
 

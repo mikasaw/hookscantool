@@ -3,9 +3,10 @@
 #include <string.h>
 
 int eat_scan_module(HANDLE process, const module_info_t* mod,
-                    hook_entry_t* hooks, int hook_cap)
+                    hook_entry_t* hooks, int hook_cap, bool* hit_cap)
 {
     int found = 0;
+    if (hit_cap) *hit_cap = false;
 
     /* Parse the in-memory PE to get export directory */
     pe_image_t mem_image;
@@ -49,7 +50,7 @@ int eat_scan_module(HANDLE process, const module_info_t* mod,
     uintptr_t ordinals_addr = mod->base_addr + exp_dir.AddressOfNameOrdinals;
     uintptr_t functions_addr = mod->base_addr + exp_dir.AddressOfFunctions;
 
-    for (uint32_t i = 0; i < name_count && found < hook_cap; i++) {
+    for (uint32_t i = 0; i < name_count; i++) {
         /* Read function name */
         uint32_t name_rva;
         if (!ReadProcessMemory(process, (LPCVOID)(names_addr + i * 4), &name_rva, 4, NULL))
@@ -101,6 +102,10 @@ int eat_scan_module(HANDLE process, const module_info_t* mod,
 
         /* Compare: if RVAs differ, it's an EAT hook */
         if (mem_func_rva != disk_func_rva) {
+            if (found >= hook_cap) {
+                if (hit_cap) *hit_cap = true;
+                break;
+            }
             hook_entry_t* h = &hooks[found];
             memset(h, 0, sizeof(*h));
 

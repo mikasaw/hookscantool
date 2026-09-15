@@ -35,10 +35,11 @@ static const char* find_module_path(const process_info_t* pinfo,
 
 int iat_scan_module(HANDLE process, uint32_t pid, const module_info_t* mod,
                     const process_info_t* pinfo,
-                    hook_entry_t* hooks, int hook_cap)
+                    hook_entry_t* hooks, int hook_cap, bool* hit_cap)
 {
     (void)pid;
     int found = 0;
+    if (hit_cap) *hit_cap = false;
 
     /* Parse the in-memory PE of this module (gives us the NT headers) */
     pe_image_t image;
@@ -65,7 +66,7 @@ int iat_scan_module(HANDLE process, uint32_t pid, const module_info_t* mod,
     const uintptr_t ordinal_flag = image.is_64bit ? 0x8000000000000000ULL : 0x80000000UL;
 
     /* Walk import descriptors straight from process memory */
-    for (int i = 0; i < MAX_IMPORT_DESCRIPTORS && found < hook_cap; i++) {
+    for (int i = 0; i < MAX_IMPORT_DESCRIPTORS; i++) {
         uintptr_t desc_addr = mod->base_addr + import_dir_rva + i * sizeof(IMAGE_IMPORT_DESCRIPTOR);
         IMAGE_IMPORT_DESCRIPTOR desc;
         if (!ReadProcessMemory(process, (LPCVOID)desc_addr, &desc, sizeof(desc), NULL))
@@ -117,7 +118,7 @@ int iat_scan_module(HANDLE process, uint32_t pid, const module_info_t* mod,
             have_disk = (pe_parse_from_disk(dll_path, &disk_data, &disk_size, &disk_image) == 0);
         }
 
-        for (int j = 0; j < thunk_count && found < hook_cap; j++) {
+        for (int j = 0; j < thunk_count; j++) {
             /* Read the IAT entry (current function pointer) */
             uintptr_t iat_entry_addr = mod->base_addr + first_thunk + j * thunk_size;
             uintptr_t func_ptr = 0;
@@ -186,6 +187,12 @@ int iat_scan_module(HANDLE process, uint32_t pid, const module_info_t* mod,
                     }
                     break; /* export found, not a benign forwarder */
                 }
+            }
+
+            if (found >= hook_cap) {
+                /* the budget is full and another hook was found */
+                if (hit_cap) *hit_cap = true;
+                break;
             }
 
             {

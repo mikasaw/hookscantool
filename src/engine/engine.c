@@ -114,28 +114,30 @@ hook_report_t* engine_scan_process(uint32_t pid)
         int room = hook_cap - report->hook_count;
 
         /* IAT scan */
+        bool hit_cap = false;
         int n = iat_scan_module(process, pid, mod, &pinfo,
-                                report->hooks + report->hook_count, room);
+                                report->hooks + report->hook_count, room, &hit_cap);
+        report->truncated |= hit_cap;
         if (n > 0) report->hook_count += n;
         room = hook_cap - report->hook_count;
 
         /* EAT scan */
         if (room > 0) {
+            hit_cap = false;
             n = eat_scan_module(process, mod,
-                                report->hooks + report->hook_count, room);
+                                report->hooks + report->hook_count, room, &hit_cap);
+            report->truncated |= hit_cap;
             if (n > 0) report->hook_count += n;
             room = hook_cap - report->hook_count;
-        } else {
-            report->truncated = true;
         }
 
         /* Inline scan */
         if (room > 0) {
+            hit_cap = false;
             n = inline_scan_module(process, mod,
-                                   report->hooks + report->hook_count, room);
+                                   report->hooks + report->hook_count, room, &hit_cap);
+            report->truncated |= hit_cap;
             if (n > 0) report->hook_count += n;
-        } else {
-            report->truncated = true;
         }
     }
 
@@ -189,14 +191,15 @@ int engine_scan_module(uint32_t pid, const module_info_t* mod,
     }
 
     int total = 0;
+    bool hit_cap = false;
 
-    int n = iat_scan_module(process, pid, mod, &pinfo, hooks, hook_cap);
+    int n = iat_scan_module(process, pid, mod, &pinfo, hooks, hook_cap, &hit_cap);
     if (n > 0) total += n;
 
-    n = eat_scan_module(process, mod, hooks + total, hook_cap - total);
+    n = eat_scan_module(process, mod, hooks + total, hook_cap - total, &hit_cap);
     if (n > 0) total += n;
 
-    n = inline_scan_module(process, mod, hooks + total, hook_cap - total);
+    n = inline_scan_module(process, mod, hooks + total, hook_cap - total, &hit_cap);
     if (n > 0) total += n;
 
     process_free_modules(&pinfo);
@@ -698,26 +701,28 @@ hook_report_t* engine_scan_modules(uint32_t pid, const module_report_t* recon,
 
         int room = hook_cap - report->hook_count;
 
+        bool hit_cap = false;
         int n = iat_scan_module(process, pid, mod, &pinfo,
-                                report->hooks + report->hook_count, room);
+                                report->hooks + report->hook_count, room, &hit_cap);
+        report->truncated |= hit_cap;
         if (n > 0) report->hook_count += n;
         room = hook_cap - report->hook_count;
 
         if (room > 0) {
+            hit_cap = false;
             n = eat_scan_module(process, mod,
-                                report->hooks + report->hook_count, room);
+                                report->hooks + report->hook_count, room, &hit_cap);
+            report->truncated |= hit_cap;
             if (n > 0) report->hook_count += n;
             room = hook_cap - report->hook_count;
-        } else {
-            report->truncated = true;
         }
 
         if (room > 0) {
+            hit_cap = false;
             n = inline_scan_module(process, mod,
-                                   report->hooks + report->hook_count, room);
+                                   report->hooks + report->hook_count, room, &hit_cap);
+            report->truncated |= hit_cap;
             if (n > 0) report->hook_count += n;
-        } else {
-            report->truncated = true;
         }
     }
 

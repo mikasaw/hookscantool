@@ -17,6 +17,6 @@
  * Returns:  Number of hooks detected, or -1 on error.
  */
 int eat_scan_module(HANDLE process, const module_info_t* mod,
-                    hook_entry_t* hooks, int hook_cap);
+                    hook_entry_t* hooks, int hook_cap, bool* hit_cap);
 
 #endif /* EAT_SCANNER_H */
