@@ -1,0 +1,68 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  build:
+    name: build (${{ matrix.toolchain }})
+    runs-on: windows-2022
+    strategy:
+      fail-fast: false
+      matrix:
+        toolchain: [msvc, mingw]
+    steps:
+      - uses: actions/checkout@v4
+
+      # --- MSVC ---
+      - name: Configure (MSVC)
+        if: matrix.toolchain == 'msvc'
+        shell: pwsh
+        run: cmake -B build -G "Visual Studio 17 2022" -A x64 -DHOOKSCAN_BUILD_TESTS=ON
+
+      - name: Build (MSVC)
+        if: matrix.toolchain == 'msvc'
+        shell: pwsh
+        run: cmake --build build --config Release
+
+      - name: Test (MSVC)
+        if: matrix.toolchain == 'msvc'
+        shell: pwsh
+        run: ./build/Release/hookscan_test.exe
+
+      # --- MinGW (choco-installed toolchain shipped with the runner) ---
+      - name: Configure & Build (MinGW)
+        if: matrix.toolchain == 'mingw'
+        shell: pwsh
+        env:
+          MINGW_BIN: C:\ProgramData\chocolatey\lib\mingw\tools\install\mingw64\bin
+        run: |
+          $env:PATH = "$env:MINGW_BIN;$env:PATH"
+          cmake -B build -G "MinGW Makefiles" -DCMAKE_BUILD_TYPE=Release -DHOOKSCAN_BUILD_TESTS=ON
+          cmake --build build -- -j $env:NUMBER_OF_PROCESSORS
+
+      - name: Test (MinGW)
+        if: matrix.toolchain == 'mingw'
+        shell: pwsh
+        run: |
+          $env:PATH = "C:\ProgramData\chocolatey\lib\mingw\tools\install\mingw64\bin;$env:PATH"
+          ./build/hookscan_test.exe
+
+      # --- Artifacts ---
+      - name: Stage artifacts
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Path dist | Out-Null
+          if ("${{ matrix.toolchain }}" -eq "msvc") {
+            Copy-Item build/Release/hookscan_cli.exe, build/Release/hookscantool.exe dist/
+          } else {
+            Copy-Item build/hookscan_cli.exe, build/hookscantool.exe dist/
+          }
+          Copy-Item LICENSE, README.md dist/
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: hookscantool-${{ matrix.toolchain }}
+          path: dist/

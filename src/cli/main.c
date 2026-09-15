@@ -2,13 +2,12 @@
 #include "process_enum.h"
 #include "module_scorer.h"
 #include "args.h"
+#include "version.h"
 #include <windows.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <ctype.h>
-
-#define HOOKSCAN_VERSION "1.0.0"
 
 static const char* hook_type_str(hook_type_t type)
 {
@@ -22,7 +21,7 @@ static const char* hook_type_str(hook_type_t type)
 
 static void print_usage(const char* prog)
 {
-    printf("HookScanTool v%s - Windows Process Hook Scanner\n\n", HOOKSCAN_VERSION);
+    printf("HookScanTool v%s - Windows Process Hook Scanner\n\n", HOOKSCAN_VERSION_STR);
     printf("Usage: %s <pid> [options]\n", prog);
     printf("       %s --deep [options]\n", prog);
     printf("Options:\n");
@@ -42,7 +41,7 @@ static void print_usage(const char* prog)
 
 static void print_version(void)
 {
-    printf("HookScanTool v%s\n", HOOKSCAN_VERSION);
+    printf("HookScanTool v%s\n", HOOKSCAN_VERSION_STR);
     printf("Windows Process Hook Scanner\n");
     printf("Engine: IAT / EAT / Inline hook detection\n");
     printf("Built: " __DATE__ " " __TIME__ "\n");

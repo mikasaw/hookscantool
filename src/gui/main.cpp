@@ -2,6 +2,7 @@
 #include "process_enum.h"
 #include "ui_module_list.h"
 #include "ui_process_tree.h"
+#include "version.h"
 #include <imgui.h>
 #include <imgui_impl_win32.h>
 #include <imgui_impl_dx11.h>
@@ -11,8 +12,6 @@
 
 /* Forward declare message handler from imgui_impl_win32.cpp */
 extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
-
-#define HOOKSCAN_VERSION "1.0.0"
 
 /* Global DirectX resources */
 static ID3D11Device*           g_pd3dDevice = NULL;
@@ -40,7 +39,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int)
                       hInstance, NULL, NULL, NULL, NULL, _T("HookScanTool"), NULL };
     RegisterClassEx(&wc);
 
-    HWND hwnd = CreateWindow(wc.lpszClassName, _T("HookScanTool v" HOOKSCAN_VERSION " - Windows Process Hook Scanner"),
+    HWND hwnd = CreateWindow(wc.lpszClassName, _T("HookScanTool v" HOOKSCAN_VERSION_STR " - Windows Process Hook Scanner"),
                              WS_OVERLAPPEDWINDOW, 100, 100, 1280, 720,
                              NULL, NULL, wc.hInstance, NULL);
 
@@ -115,7 +114,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int)
             ImGui::OpenPopup("About HookScanTool");
             if (ImGui::BeginPopupModal("About HookScanTool", &show_about,
                 ImGuiWindowFlags_AlwaysAutoResize)) {
-                ImGui::Text("HookScanTool v%s", HOOKSCAN_VERSION);
+                ImGui::Text("HookScanTool v%s", HOOKSCAN_VERSION_STR);
                 ImGui::Separator();
                 ImGui::Text("Windows Process Hook Scanner");
                 ImGui::Text("Detects IAT, EAT, and inline hooks in running processes.");
@@ -211,7 +210,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int)
             /* Right: version */
             float status_w = ImGui::GetContentRegionAvail().x;
             ImGui::SameLine(status_w - 100);
-            ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.5f, 1.0f), "v%s", HOOKSCAN_VERSION);
+            ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.5f, 1.0f), "v%s", HOOKSCAN_VERSION_STR);
         }
 
         ImGui::End();

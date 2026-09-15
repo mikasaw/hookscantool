@@ -1,0 +1,41 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build (MSVC Release)
+        shell: pwsh
+        run: |
+          cmake -B build -G "Visual Studio 17 2022" -A x64 -DHOOKSCAN_BUILD_TESTS=ON
+          cmake --build build --config Release
+
+      - name: Test
+        shell: pwsh
+        run: ./build/Release/hookscan_test.exe
+
+      - name: Package
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Path dist/hookscantool-$env:GITHUB_REF_NAME | Out-Null
+          Copy-Item build/Release/hookscan_cli.exe, build/Release/hookscantool.exe, LICENSE, README.md dist/hookscantool-$env:GITHUB_REF_NAME/
+          Compress-Archive -Path dist/hookscantool-$env:GITHUB_REF_NAME -DestinationPath dist/hookscantool-$env:GITHUB_REF_NAME-win-x64.zip
+          $hash = (Get-FileHash dist/hookscantool-$env:GITHUB_REF_NAME-win-x64.zip -Algorithm SHA256).Hash
+          "$hash  hookscantool-$env:GITHUB_REF_NAME-win-x64.zip" | Out-File -Encoding ascii dist/hookscantool-$env:GITHUB_REF_NAME-win-x64.zip.sha256
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/hookscantool-*-win-x64.zip
+            dist/hookscantool-*-win-x64.zip.sha256
+          generate_release_notes: true

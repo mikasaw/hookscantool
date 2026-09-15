@@ -1,8 +1,20 @@
 cmake_minimum_required(VERSION 3.20)
-project(hookscantool C CXX)
+project(hookscantool VERSION 1.0.0 LANGUAGES C CXX)
 
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_CXX_STANDARD 17)
+
+# --- Generated version header/resource (single source of truth:
+#     the project() VERSION above) ---
+set(HOOKSCAN_GENERATED_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated")
+configure_file(
+    "${CMAKE_CURRENT_SOURCE_DIR}/cmake/version.h.in"
+    "${HOOKSCAN_GENERATED_DIR}/version.h"
+)
+configure_file(
+    "${CMAKE_CURRENT_SOURCE_DIR}/cmake/version.rc.in"
+    "${HOOKSCAN_GENERATED_DIR}/version.rc"
+)
 
 # --- Local dependencies (pre-downloaded in deps/) ---
 # Copy Zycore into Zydis' expected submodule path
@@ -40,7 +52,10 @@ target_link_libraries(hookscan_engine PRIVATE Zydis psapi)
 add_executable(hookscan_cli
     src/cli/main.c
     src/cli/args.c
-    src/version.rc
+    "${HOOKSCAN_GENERATED_DIR}/version.rc"
+)
+target_include_directories(hookscan_cli PRIVATE
+    "${HOOKSCAN_GENERATED_DIR}"
 )
 target_link_libraries(hookscan_cli PRIVATE hookscan_engine Zydis psapi)
 
@@ -68,7 +83,7 @@ add_executable(hookscantool WIN32
     src/gui/ui_chain_view.cpp
     src/gui/ui_restore.cpp
     src/gui/ui_module_list.cpp
-    src/version.rc
+    "${HOOKSCAN_GENERATED_DIR}/version.rc"
 )
 target_link_libraries(hookscantool PRIVATE
     hookscan_engine
@@ -81,6 +96,7 @@ target_link_libraries(hookscantool PRIVATE
     psapi
 )
 target_include_directories(hookscantool PRIVATE
+    "${HOOKSCAN_GENERATED_DIR}"
     ${IMGUI_DIR}
     ${IMGUI_DIR}/backends
 )
