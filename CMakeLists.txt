@@ -96,6 +96,7 @@ target_link_libraries(hookscantool PRIVATE
     dxgi
     d3dcompiler
     dwmapi
+    comdlg32
     psapi
 )
 target_include_directories(hookscantool PRIVATE

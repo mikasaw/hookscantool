@@ -17,6 +17,8 @@ build-msvc*/
 # Dependency archives
 deps/zydis.zip
 deps/imgui.zip
+deps/zydis-4.0.0/dependencies/
+
 
 # Local AI assistant configs (contain secrets — never commit)
 .claude/

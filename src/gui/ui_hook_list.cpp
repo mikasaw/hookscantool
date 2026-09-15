@@ -1,9 +1,49 @@
 #include "ui_hook_list.h"
+#include "engine.h"
 #include <imgui.h>
+#include <windows.h>
+#include <commdlg.h>
 #include <cstdio>
 #include <cstring>
 
 static int g_selected_hook = -1;
+
+/* Save-as dialog; returns chosen path in buf (empty on cancel) */
+static bool save_file_dialog(const char* filter, const char* def_ext,
+                             char* buf, int cap)
+{
+    OPENFILENAMEA ofn;
+    memset(&ofn, 0, sizeof(ofn));
+    buf[0] = '\0';
+    ofn.lStructSize = sizeof(ofn);
+    ofn.hwndOwner   = GetActiveWindow();
+    ofn.lpstrFilter = filter;
+    ofn.lpstrFile   = buf;
+    ofn.nMaxFile    = cap;
+    ofn.lpstrDefExt = def_ext;
+    ofn.Flags       = OFN_OVERWRITEPROMPT;
+    return GetSaveFileNameA(&ofn) != 0;
+}
+
+/* sticky so the user can actually read it */
+static char g_export_status[512] = "";
+
+static void export_report(const hook_report_t* report, bool as_json)
+{
+    char path[MAX_PATH];
+    const char* filter = as_json
+        ? "JSON report\0*.json\0All files\0*.*\0"
+        : "CSV report\0*.csv\0All files\0*.*\0";
+    const char* ext = as_json ? "json" : "csv";
+    if (!save_file_dialog(filter, ext, path, MAX_PATH)) {
+        snprintf(g_export_status, sizeof(g_export_status), "Export cancelled.");
+        return;
+    }
+    bool ok = as_json ? engine_report_to_json(report, path) == 0
+                      : engine_report_to_csv(report, path) == 0;
+    snprintf(g_export_status, sizeof(g_export_status),
+             ok ? "Report written to %s" : "Failed to write %s", path);
+}
 
 static const char* hook_type_str(hook_type_t type)
 {
@@ -50,6 +90,20 @@ int ui_hook_list_render(const hook_report_t* report)
     ImGui::Text("Process: %s (PID %u) | Hooks: %d | Modules: %d | Time: %llu ms",
                 report->process_name, report->pid, report->hook_count,
                 report->modules_scanned, (unsigned long long)report->scan_time_ms);
+    if (report->truncated) {
+        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.6f, 0.2f, 1.0f));
+        ImGui::TextWrapped("WARNING: hook buffer filled up - results may be incomplete.");
+        ImGui::PopStyleColor();
+    }
+    if (ImGui::Button("Export JSON")) {
+        export_report(report, true);
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Export CSV")) {
+        export_report(report, false);
+    }
+    if (g_export_status[0])
+        ImGui::TextWrapped("%s", g_export_status);
     ImGui::Separator();
 
     if (ImGui::BeginTable("hooks_table", 6,
