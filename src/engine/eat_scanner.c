@@ -16,8 +16,10 @@ eat_match_result_t eat_match_disk_rva(const pe_image_t* disk_image,
                     first = (uint32_t)disk_image->exports[j].rva;
                     found = true;
                 }
-                if ((uint32_t)disk_image->exports[j].rva == mem_rva)
+                if ((uint32_t)disk_image->exports[j].rva == mem_rva) {
+                    if (first_rva) *first_rva = first;
                     return EAT_MATCH_ALIAS;
+                }
             }
         }
     }

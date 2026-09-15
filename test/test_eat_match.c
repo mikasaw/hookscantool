@@ -32,8 +32,7 @@ static void test_match_alias_first_occurrence(void)
     uint32_t first = 0;
     ASSERT_EQ(eat_match_disk_rva(&img, "Foo", 0x1000, &first), EAT_MATCH_ALIAS);
     ASSERT_EQ(first, 0x1000);
-    free(owned);
-    pe_free(&img);
+    pe_free(&img);   /* frees exports (same block as owned) */
 }
 
 static void test_match_alias_second_occurrence(void)
@@ -48,7 +47,6 @@ static void test_match_alias_second_occurrence(void)
     ASSERT_EQ(eat_match_disk_rva(&img, "Foo", 0x3000, &first), EAT_MATCH_ALIAS);
     ASSERT_EQ(first, 0x1000); /* first occurrence reported as original */
     ASSERT_EQ(eat_match_disk_rva(&img, "Foo", 0x4000, &first), EAT_MATCH_ALIAS);
-    free(owned);
     pe_free(&img);
 }
 
@@ -62,7 +60,6 @@ static void test_match_different_is_hook(void)
     uint32_t first = 0;
     ASSERT_EQ(eat_match_disk_rva(&img, "Foo", 0x9000, &first), EAT_MATCH_DIFFERENT);
     ASSERT_EQ(first, 0x1000);
-    free(owned);
     pe_free(&img);
 }
 
@@ -75,7 +72,6 @@ static void test_match_not_found(void)
 
     ASSERT_EQ(eat_match_disk_rva(&img, "Missing", 0x1000, NULL), EAT_MATCH_NOT_FOUND);
     ASSERT_EQ(eat_match_disk_rva(NULL, "Foo", 0x1000, NULL), EAT_MATCH_NOT_FOUND);
-    free(owned);
     pe_free(&img);
 }
 
