@@ -58,6 +58,7 @@ static bool passes_filter(const scored_module_t* mod, int filter)
 
 static void auto_check_visible(void)
 {
+    std::lock_guard<std::mutex> lock(g_recon_mutex);
     if (!g_recon) return;
     g_checked.resize(g_recon->module_count, false);
     for (int i = 0; i < g_recon->module_count; i++) {
@@ -69,8 +70,19 @@ static void auto_check_visible(void)
 
 static void clear_state(void)
 {
+    /* A selective scan thread keeps reading g_recon (captured at start)
+     * for its whole run — park it for deferred free instead of deleting
+     * it mid-read. Deferred frees happen once no scan is in flight. */
     if (g_recon) {
-        engine_free_module_report(g_recon);
+        if (g_sel_scanning.load()) {
+            /* pending predates g_recon, so no in-flight scan can hold it */
+            if (g_pending_recon_free) {
+                engine_free_module_report(g_pending_recon_free);
+            }
+            g_pending_recon_free = g_recon;
+        } else {
+            engine_free_module_report(g_recon);
+        }
         g_recon = NULL;
     }
     g_checked.clear();
@@ -196,10 +208,11 @@ uint32_t ui_module_list_render(uint32_t selected_pid, bool scanning)
         }
     }
 
-    /* Free deferred recon from previous run (safe: only on render thread) */
+    /* Free deferred recon from previous run (safe: only on render thread,
+     * and only once no scan thread is still reading it) */
     {
         std::lock_guard<std::mutex> lock(g_recon_mutex);
-        if (g_pending_recon_free) {
+        if (g_pending_recon_free && !g_sel_scanning.load()) {
             engine_free_module_report(g_pending_recon_free);
             g_pending_recon_free = NULL;
         }
@@ -425,7 +438,10 @@ uint32_t ui_module_list_render(uint32_t selected_pid, bool scanning)
                     if (i < (int)checked_snap.size()) {
                         checked_snap[i] = checked;
                         std::lock_guard<std::mutex> lock(g_recon_mutex);
-                        g_checked[i] = checked;
+                        /* recon may have swapped mid-frame; never write past the live list */
+                        if (i < (int)g_checked.size()) {
+                            g_checked[i] = checked;
+                        }
                     }
                 }
             }
