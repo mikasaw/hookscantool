@@ -21,6 +21,7 @@ void register_test_impl(const char* name, test_fn_t fn)
 void register_tests_pe_parser(void);
 void register_tests_module_scorer(void);
 void register_tests_inline_matcher(void);
+void register_tests_cli_args(void);
 
 int main(void)
 {
@@ -31,6 +32,7 @@ int main(void)
     register_tests_pe_parser();
     register_tests_module_scorer();
     register_tests_inline_matcher();
+    register_tests_cli_args();
 
     /* Run all registered tests */
     for (int i = 0; i < g_test_count; i++) {

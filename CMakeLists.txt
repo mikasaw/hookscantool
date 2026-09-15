@@ -39,6 +39,7 @@ target_link_libraries(hookscan_engine PRIVATE Zydis psapi)
 # --- CLI tool ---
 add_executable(hookscan_cli
     src/cli/main.c
+    src/cli/args.c
     src/version.rc
 )
 target_link_libraries(hookscan_cli PRIVATE hookscan_engine Zydis psapi)
@@ -119,10 +120,13 @@ if(HOOKSCAN_BUILD_TESTS)
         test/test_pe_parser.c
         test/test_module_scorer.c
         test/test_inline_matcher.c
+        test/test_cli_args.c
+        src/cli/args.c
     )
     target_include_directories(hookscan_test PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/test
         ${CMAKE_CURRENT_SOURCE_DIR}/src/engine
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/cli
     )
     target_compile_definitions(hookscan_test PRIVATE HOOKSCAN_TESTING)
     target_link_libraries(hookscan_test PRIVATE

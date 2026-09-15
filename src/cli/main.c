@@ -1,9 +1,12 @@
 #include "engine.h"
 #include "process_enum.h"
 #include "module_scorer.h"
+#include "args.h"
+#include <windows.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <ctype.h>
 
 #define HOOKSCAN_VERSION "1.0.0"
 
@@ -146,6 +149,9 @@ static void list_modules(uint32_t pid, int filter)
 
 int main(int argc, char* argv[])
 {
+    /* Process/module names arrive as UTF-8 — match the console to them */
+    SetConsoleOutputCP(CP_UTF8);
+
     if (argc < 2) {
         print_usage(argv[0]);
         return 1;
@@ -185,7 +191,11 @@ int main(int argc, char* argv[])
             return 0;
         } else if (strcmp(argv[i], "--modules") == 0) {
             show_modules = true;
-        } else if (strcmp(argv[i], "--filter") == 0 && i + 1 < argc) {
+        } else if (strcmp(argv[i], "--filter") == 0) {
+            if (i + 1 >= argc) {
+                printf("Missing value for --filter\n");
+                return 1;
+            }
             i++;
             if (strcmp(argv[i], "s") == 0) module_filter = 1;
             else if (strcmp(argv[i], "a") == 0) module_filter = 0;
@@ -195,47 +205,53 @@ int main(int argc, char* argv[])
                 return 1;
             }
             show_modules = true;  /* --filter implies --modules */
-        } else if (strcmp(argv[i], "--scan-module") == 0 && i + 1 < argc) {
-            char* endp = NULL;
-            errno = 0;
-            long val = strtol(argv[++i], &endp, 10);
-            if (*endp != '\0' || val < 0 || val > INT_MAX || errno != 0) {
+        } else if (strcmp(argv[i], "--scan-module") == 0) {
+            if (i + 1 >= argc) {
+                printf("Missing value for --scan-module\n");
+                return 1;
+            }
+            if (!parse_index(argv[++i], &scan_module_idx)) {
                 printf("Invalid module index: %s\n", argv[i]);
                 return 1;
             }
-            scan_module_idx = (int)val;
-        } else if (strcmp(argv[i], "--json") == 0 && i + 1 < argc) {
+        } else if (strcmp(argv[i], "--json") == 0) {
+            if (i + 1 >= argc) {
+                printf("Missing value for --json\n");
+                return 1;
+            }
             json_path = argv[++i];
-        } else if (strcmp(argv[i], "--restore") == 0 && i + 1 < argc) {
-            char* endp_r = NULL;
-            errno = 0;
-            long val = strtol(argv[++i], &endp_r, 10);
-            if (*endp_r != '\0' || val < 0 || val > INT_MAX || errno != 0) {
+        } else if (strcmp(argv[i], "--restore") == 0) {
+            if (i + 1 >= argc) {
+                printf("Missing value for --restore\n");
+                return 1;
+            }
+            if (!parse_index(argv[++i], &restore_idx)) {
                 printf("Invalid restore index: %s\n", argv[i]);
                 return 1;
             }
-            restore_idx = (int)val;
         } else if (argv[i][0] == '-') {
-            printf("Unknown option: %s\n", argv[i]);
+            /* Distinguish mistyped negative numbers from unknown options */
+            const char* rest = argv[i] + 1;
+            bool looks_numeric = *rest != '\0';
+            for (const char* c = rest; *c; c++) {
+                if (!isdigit((unsigned char)*c)) { looks_numeric = false; break; }
+            }
+            if (looks_numeric)
+                printf("Invalid PID: %s (PID must be a positive number)\n", argv[i]);
+            else
+                printf("Unknown option: %s\n", argv[i]);
             return 1;
         } else {
-            char* endp = NULL;
-            errno = 0;
-            uint32_t p = (uint32_t)strtoul(argv[i], &endp, 10);
-            if (errno != 0 || *endp == '\0') {
-                if (p == 0 && *endp == '\0' && argv[i][0] != '0') {
-                    printf("Invalid PID: %s\n", argv[i]);
-                    return 1;
-                }
-                if (pid != 0) {
-                    printf("Multiple PIDs specified. Only one PID is allowed.\n");
-                    return 1;
-                }
-                pid = p;
-            } else {
+            uint32_t p = 0;
+            if (!parse_pid(argv[i], &p)) {
                 printf("Invalid PID: %s\n", argv[i]);
                 return 1;
             }
+            if (pid != 0) {
+                printf("Multiple PIDs specified. Only one PID is allowed.\n");
+                return 1;
+            }
+            pid = p;
         }
     }
 
@@ -290,11 +306,17 @@ int main(int argc, char* argv[])
             return 1;
         }
         print_hook_report(report);
-        if (json_path && engine_report_to_json(report, json_path) == 0) {
-            printf("\nJSON report written to: %s\n", json_path);
+        int exit_code = 0;
+        if (json_path) {
+            if (engine_report_to_json(report, json_path) == 0) {
+                printf("\nJSON report written to: %s\n", json_path);
+            } else {
+                printf("\nFailed to write JSON report to: %s\n", json_path);
+                exit_code = 1;
+            }
         }
         engine_free_report(report);
-        return 0;
+        return exit_code;
     }
 
     printf("Scanning PID %u...\n", pid);
@@ -313,21 +335,30 @@ int main(int argc, char* argv[])
 
     print_hook_report(report);
 
+    int exit_code = 0;
+
     /* Restore a hook if requested */
-    if (restore_idx >= 0 && restore_idx < report->hook_count) {
-        hook_entry_t* h = &report->hooks[restore_idx];
-        printf("\nRestore hook #%d (%s!%s) in PID %u? [y/N] ",
-               restore_idx, h->module_name, h->function_name, pid);
-        fflush(stdout);
-        char answer[8] = {0};
-        if (fgets(answer, sizeof(answer), stdin) && (answer[0] == 'y' || answer[0] == 'Y')) {
-            if (engine_restore_hook(pid, h)) {
-                printf("Hook restored successfully.\n");
-            } else {
-                printf("Failed to restore hook.\n");
-            }
+    if (restore_idx >= 0) {
+        if (restore_idx >= report->hook_count) {
+            printf("\nError: hook index %d out of range (0..%d). Nothing was restored.\n",
+                   restore_idx, report->hook_count - 1);
+            exit_code = 1;
         } else {
-            printf("Aborted.\n");
+            hook_entry_t* h = &report->hooks[restore_idx];
+            printf("\nRestore hook #%d (%s!%s) in PID %u? [y/N] ",
+                   restore_idx, h->module_name, h->function_name, pid);
+            fflush(stdout);
+            char answer[8] = {0};
+            if (fgets(answer, sizeof(answer), stdin) && (answer[0] == 'y' || answer[0] == 'Y')) {
+                if (engine_restore_hook(pid, h)) {
+                    printf("Hook restored successfully.\n");
+                } else {
+                    printf("Failed to restore hook.\n");
+                    exit_code = 1;
+                }
+            } else {
+                printf("Aborted.\n");
+            }
         }
     }
 
@@ -336,10 +367,11 @@ int main(int argc, char* argv[])
         if (engine_report_to_json(report, json_path) == 0) {
             printf("\nJSON report written to: %s\n", json_path);
         } else {
-            printf("\nFailed to write JSON report.\n");
+            printf("\nFailed to write JSON report to: %s\n", json_path);
+            exit_code = 1;
         }
     }
 
     engine_free_report(report);
-    return 0;
+    return exit_code;
 }
