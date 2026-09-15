@@ -33,6 +33,77 @@ static const char* find_module_path(const process_info_t* pinfo,
     return NULL;
 }
 
+/* Find the loaded module that contains addr. Returns its index or -1. */
+static int find_owner_module(const process_info_t* pinfo, uintptr_t addr)
+{
+    for (int i = 0; i < pinfo->module_count; i++) {
+        if (addr >= pinfo->modules[i].base_addr &&
+            addr < pinfo->modules[i].base_addr + pinfo->modules[i].size)
+            return i;
+    }
+    return -1;
+}
+
+/* Cache of parsed on-disk images for api-set owner verification */
+#define OWNER_CACHE_CAP 16
+typedef struct {
+    char       name[64];
+    bool       tried;
+    bool       valid;
+    uint8_t*   data;
+    size_t     size;
+    pe_image_t image;
+} owner_cache_t;
+
+static void owner_cache_free(owner_cache_t* cache)
+{
+    for (int i = 0; i < OWNER_CACHE_CAP; i++) {
+        if (cache[i].valid) {
+            pe_unmap_disk_image(cache[i].data, cache[i].size);
+            pe_free(&cache[i].image);
+        }
+        cache[i].data = NULL;
+        cache[i].size = 0;
+        cache[i].tried = false;
+        cache[i].valid = false;
+    }
+}
+
+static owner_cache_t* owner_cache_get(owner_cache_t* cache,
+                                      const process_info_t* pinfo,
+                                      const char* dll_name)
+{
+    for (int i = 0; i < OWNER_CACHE_CAP; i++)
+        if (cache[i].tried && _stricmp(cache[i].name, dll_name) == 0)
+            return &cache[i];
+    for (int i = 0; i < OWNER_CACHE_CAP; i++) {
+        if (!cache[i].tried) {
+            snprintf(cache[i].name, sizeof(cache[i].name), "%s", dll_name);
+            cache[i].tried = true;
+            const char* path = find_module_path(pinfo, dll_name);
+            cache[i].valid = path != NULL &&
+                pe_parse_from_disk(path, &cache[i].data, &cache[i].size, &cache[i].image) == 0;
+            return &cache[i];
+        }
+    }
+    return NULL; /* cache exhausted — caller must not guess */
+}
+
+/* True if addr equals any export address of the named module (on-disk EAT).
+ * Matching by address (not by import name) also covers forwarded api-set
+ * resolutions, where the loader lands on the forward target's export. */
+static bool owner_contains_export_addr(owner_cache_t* entry, uintptr_t owner_base,
+                                       uintptr_t addr)
+{
+    if (!entry || !entry->valid)
+        return false;
+    for (int k = 0; k < entry->image.export_count; k++) {
+        if (owner_base + entry->image.exports[k].rva == addr)
+            return true;
+    }
+    return false;
+}
+
 int iat_scan_module(HANDLE process, uint32_t pid, const module_info_t* mod,
                     const process_info_t* pinfo,
                     hook_entry_t* hooks, int hook_cap, bool* hit_cap)
@@ -64,6 +135,9 @@ int iat_scan_module(HANDLE process, uint32_t pid, const module_info_t* mod,
 
     const size_t thunk_size = image.is_64bit ? 8 : 4;
     const uintptr_t ordinal_flag = image.is_64bit ? 0x8000000000000000ULL : 0x80000000UL;
+
+    owner_cache_t owner_cache[OWNER_CACHE_CAP];
+    memset(owner_cache, 0, sizeof(owner_cache));
 
     /* Walk import descriptors straight from process memory */
     for (int i = 0; i < MAX_IMPORT_DESCRIPTORS; i++) {
@@ -127,9 +201,9 @@ int iat_scan_module(HANDLE process, uint32_t pid, const module_info_t* mod,
 
             if (func_ptr == 0) continue;
 
-            /* Only entries pointing outside the imported DLL can be hooks */
-            if (!dll_found ||
-                (func_ptr >= dll_base && func_ptr < dll_base + dll_size))
+            /* Entries inside the imported DLL are by definition fine */
+            if (dll_found &&
+                func_ptr >= dll_base && func_ptr < dll_base + dll_size)
                 continue;
 
             /* Function name from the OriginalFirstThunk array (parallel
@@ -157,7 +231,7 @@ int iat_scan_module(HANDLE process, uint32_t pid, const module_info_t* mod,
              * legitimately points the IAT outside KERNEL32. If the named
              * export forwards to a DLL whose range contains the pointer,
              * this is the loader doing its job, not a hook. */
-            if (have_disk && fname[0] != '\0') {
+            if (dll_found && have_disk && fname[0] != '\0') {
                 for (int k = 0; k < disk_image.export_count; k++) {
                     if (strcmp(disk_image.exports[k].name, fname) != 0)
                         continue;
@@ -188,6 +262,34 @@ int iat_scan_module(HANDLE process, uint32_t pid, const module_info_t* mod,
                     break; /* export found, not a benign forwarder */
                 }
             }
+
+            /* Unresolved import names (api-ms-* API Sets): the loader maps
+             * them to a real module, so the pointer must land inside some
+             * loaded module that actually exports the function. */
+            bool flag = true;
+            if (!dll_found) {
+                int owner = find_owner_module(pinfo, func_ptr);
+                if (owner < 0) {
+                    /* pointer into unmapped memory — hijacked import */
+                    flag = true;
+                } else if (fname[0] == '\0' || strncmp(fname, "Ordinal_", 8) == 0) {
+                    /* cannot verify by name — do not guess */
+                    continue;
+                } else {
+                    owner_cache_t* e = owner_cache_get(owner_cache, pinfo,
+                                                       pinfo->modules[owner].name);
+                    if (e && owner_contains_export_addr(e, pinfo->modules[owner].base_addr,
+                                                        func_ptr))
+                        flag = false;  /* legitimate api-set resolution */
+                    else if (!e || !e->valid)
+                        continue;      /* cache/parse exhausted — cannot verify, don't guess */
+                    else
+                        flag = true;   /* pointer is not any export of the owner */
+                }
+            }
+
+            if (!flag)
+                goto next_thunk;
 
             if (found >= hook_cap) {
                 /* the budget is full and another hook was found */
@@ -246,6 +348,7 @@ int iat_scan_module(HANDLE process, uint32_t pid, const module_info_t* mod,
         }
     }
 
+    owner_cache_free(owner_cache);
     pe_free(&image);
     return found;
 }

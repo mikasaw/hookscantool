@@ -107,6 +107,12 @@ def main():
             "inline hook (MulDiv)")
         del eat_idx, iat_idx
 
+        apiset_idx = find(
+            lambda h: h["type"] == "IAT" and h["module"].lower().startswith("api-ms-")
+            and h["function"].lower() == "_initterm",
+            "api-set hijack (_initterm)")
+        del apiset_idx
+
         if not hooks[inline_idx].get("restorable", False):
             fail("inline hook is not marked restorable")
 

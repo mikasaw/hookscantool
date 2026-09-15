@@ -159,6 +159,11 @@ static BOOL patch_own_eat(void)
     return FALSE;
 }
 
+/* api-set hijack target: a static (non-exported) function. The scanner
+ * must flag an api-ms import whose pointer is not any export of the
+ * owner module it resolves to (hook_dll exports no such stub). */
+static int __cdecl my_hidden_stub(void) { return 0; }
+
 static void report(const char* what, BOOL ok)
 {
     printf("hook_dll: %-12s %s\n", what, ok ? "INSTALLED" : "FAILED");
@@ -182,6 +187,13 @@ BOOL WINAPI DllMain(HINSTANCE hinst, DWORD reason, LPVOID reserved)
                             "KERNEL32.DLL", "lstrlenW",
                             (void*)my_lstrlenW, &orig_lstrlen);
     report("iat", iat_ok);
+
+    /* api-set hijack: _initterm is only called during CRT startup, so
+     * redirecting it is safe for the rest of the process lifetime. */
+    BOOL apims_ok = patch_iat(GetModuleHandleA(NULL),
+                              "api-ms-win-crt-runtime-l1-1-0.dll", "_initterm",
+                              (void*)my_hidden_stub, &orig_lstrlen);
+    report("apims", apims_ok);
 
     FARPROC muldiv = GetProcAddress(GetModuleHandleA("KERNEL32.DLL"), "MulDiv");
     BOOL inline_ok = muldiv && patch_inline((void*)muldiv, (void*)my_MulDiv,
