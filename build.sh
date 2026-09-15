@@ -1,15 +1,18 @@
 #!/bin/bash
 # Build script for hookscantool
+# Usage: ./build.sh [msvc|mingw] [build-dir]
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-BUILD_DIR="$SCRIPT_DIR/build"
+TOOLCHAIN="${1:-mingw}"
+BUILD_DIR="${2:-$SCRIPT_DIR/build-$TOOLCHAIN}"
 
 # Detect compiler
-if [ -n "$1" ] && [ "$1" = "msvc" ]; then
+if [ "$TOOLCHAIN" = "msvc" ]; then
     echo "Using MSVC..."
-    # MSVC build via cmake
-    cmake -B "$BUILD_DIR" -S "$SCRIPT_DIR" -G "Visual Studio 17 2022" -A x64
+    # Generator name: "Visual Studio 17 2022" or "Visual Studio 18 2026" (Insiders)
+    VS_GEN="${VS_GEN:-Visual Studio 17 2022}"
+    cmake -B "$BUILD_DIR" -S "$SCRIPT_DIR" -G "$VS_GEN" -A x64
     cmake --build "$BUILD_DIR" --config Release
 else
     # MinGW GCC build
@@ -20,15 +23,15 @@ else
     echo "Using GCC: $GCC"
     echo "Using G++: $GXX"
 
-    rm -rf "$BUILD_DIR"
-    mkdir -p "$BUILD_DIR"
-
-    cmake -B "$BUILD_DIR" -S "$SCRIPT_DIR" \
-        -G "MinGW Makefiles" \
-        -DCMAKE_C_COMPILER="$GCC" \
-        -DCMAKE_CXX_COMPILER="$GXX" \
-        -DCMAKE_MAKE_PROGRAM="$MAKE" \
-        -DCMAKE_BUILD_TYPE=Release
+    # Configure only if needed, so rebuilds are incremental
+    if [ ! -f "$BUILD_DIR/CMakeCache.txt" ]; then
+        cmake -B "$BUILD_DIR" -S "$SCRIPT_DIR" \
+            -G "MinGW Makefiles" \
+            -DCMAKE_C_COMPILER="$GCC" \
+            -DCMAKE_CXX_COMPILER="$GXX" \
+            -DCMAKE_MAKE_PROGRAM="$MAKE" \
+            -DCMAKE_BUILD_TYPE=Release
+    fi
 
     cmake --build "$BUILD_DIR" -- -j$(nproc 2>/dev/null || echo 4)
 fi
