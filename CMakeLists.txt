@@ -41,6 +41,7 @@ add_library(hookscan_engine STATIC
     src/engine/restore.c
     src/engine/wow64.c
     src/engine/module_scorer.c
+    src/engine/sigcheck.c
     src/engine/engine.c
 )
 target_include_directories(hookscan_engine PUBLIC
@@ -49,7 +50,7 @@ target_include_directories(hookscan_engine PUBLIC
 target_include_directories(hookscan_engine PRIVATE
     "${HOOKSCAN_GENERATED_DIR}"
 )
-target_link_libraries(hookscan_engine PRIVATE Zydis psapi)
+target_link_libraries(hookscan_engine PRIVATE Zydis psapi bcrypt)
 
 # --- CLI tool ---
 add_executable(hookscan_cli
@@ -155,6 +156,7 @@ if(HOOKSCAN_BUILD_TESTS)
         test/test_cli_args.c
         test/test_json_writer.c
         test/test_eat_match.c
+        test/test_sigcheck.c
         src/cli/args.c
     )
     target_include_directories(hookscan_test PRIVATE

@@ -2,6 +2,7 @@
 #include "process_enum.h"
 #include "module_scorer.h"
 #include "args.h"
+#include "sigcheck.h"
 #include "version.h"
 #include <windows.h>
 #include <stdio.h>
@@ -37,6 +38,7 @@ static void print_usage(const char* prog)
     printf("  --interval <sec>    Watch interval in seconds (default 30, min 1)\n");
     printf("  --deep              Scan every accessible process (no <pid> needed)\n");
     printf("  --jobs <n>          --deep worker threads (default 4, max 32)\n");
+    printf("  --sigs <path>       Known-signature database for hook targets\n");
     printf("  --version           Show version information\n");
     printf("  --help              Show this help\n");
     printf("\nWatch exit codes: 0 = clean stop, 1 = new hooks seen, 2 = target lost\n");
@@ -96,6 +98,8 @@ static void print_hook_report(const hook_report_t* report)
                    (unsigned long long)h->original_addr,
                    (unsigned long long)h->current_addr,
                    h->restorable ? "YES" : "NO");
+            if (h->signature[0])
+                printf("      [known] %s\n", h->signature);
 
             /* Print chain if available */
             for (int c = 0; c < h->chain_depth; c++) {
@@ -477,6 +481,7 @@ int main(int argc, char* argv[])
     const char* json_path = NULL;
     const char* csv_path = NULL;
     const char* sarif_path = NULL;
+    const char* sigs_path = "signatures.txt";
     int restore_idx = -1;
     int scan_module_idx = -1;
     bool show_modules = false;
@@ -562,6 +567,12 @@ int main(int argc, char* argv[])
                 return 1;
             }
             sarif_path = argv[++i];
+        } else if (strcmp(argv[i], "--sigs") == 0) {
+            if (i + 1 >= argc) {
+                printf("Missing value for --sigs\n");
+                return 1;
+            }
+            sigs_path = argv[++i];
         } else if (strcmp(argv[i], "--restore") == 0) {
             if (i + 1 >= argc) {
                 printf("Missing value for --restore\n");
@@ -596,6 +607,9 @@ int main(int argc, char* argv[])
             pid = p;
         }
     }
+
+    if (sigs_path && sigcheck_load(sigs_path) > 0)
+        printf("Loaded %d known signatures from %s.\n", sigcheck_count(), sigs_path);
 
     /* Handle --deep: scan all processes, no PID required */
     if (deep_mode) {

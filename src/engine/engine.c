@@ -7,6 +7,7 @@
 #include "restore.h"
 #include "wow64.h"
 #include "module_scorer.h"
+#include "sigcheck.h"
 #include "version.h"
 #include <stdlib.h>
 #include <string.h>
@@ -158,6 +159,28 @@ hook_report_t* engine_scan_process(uint32_t pid)
         }
     }
 
+    /* Annotate hooks with known-signature labels of their target modules
+     * (no-op unless a signature database was loaded) */
+    for (int i = 0; sigcheck_count() > 0 && i < report->hook_count; i++) {
+        hook_entry_t* h = &report->hooks[i];
+        int owner = -1;
+        for (int m = 0; m < pinfo.module_count; m++) {
+            if (h->current_addr >= pinfo.modules[m].base_addr &&
+                h->current_addr < pinfo.modules[m].base_addr + pinfo.modules[m].size) {
+                owner = m;
+                break;
+            }
+        }
+        if (owner < 0 || pinfo.modules[owner].path[0] == 0)
+            continue;
+        char hex[65];
+        if (sigcheck_hash_file(pinfo.modules[owner].path, hex)) {
+            const char* label = sigcheck_lookup(hex);
+            if (label)
+                snprintf(h->signature, sizeof(h->signature), "%s", label);
+        }
+    }
+
     QueryPerformanceCounter(&t1);
     report->scan_time_ms = (uint64_t)((t1.QuadPart - t0.QuadPart) * 1000 / freq.QuadPart);
 
@@ -277,6 +300,9 @@ static void json_write_report_body(FILE* f, const hook_report_t* report)
         fprintf(f, "        \"original_addr\": \"0x%016llX\",\n", (unsigned long long)h->original_addr);
         fprintf(f, "        \"current_addr\": \"0x%016llX\",\n", (unsigned long long)h->current_addr);
         fprintf(f, "        \"restorable\": %s,\n", h->restorable ? "true" : "false");
+        fprintf(f, "        \"signature\": ");
+        json_write_string(f, h->signature);
+        fprintf(f, ",\n");
         fprintf(f, "        \"chain_depth\": %d,\n", h->chain_depth);
 
         /* Original bytes */

@@ -24,6 +24,7 @@ void register_tests_inline_matcher(void);
 void register_tests_cli_args(void);
 void register_tests_json_writer(void);
 void register_tests_eat_match(void);
+void register_tests_sigcheck(void);
 
 int main(void)
 {
@@ -37,6 +38,7 @@ int main(void)
     register_tests_cli_args();
     register_tests_json_writer();
     register_tests_eat_match();
+    register_tests_sigcheck();
 
     /* Run all registered tests */
     for (int i = 0; i < g_test_count; i++) {

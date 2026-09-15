@@ -33,6 +33,7 @@ typedef struct {
     chain_step_t*  chain;           /* Hook chain steps (array, chain_depth entries) */
     int            chain_depth;
     bool           restorable;      /* false if packed DLL or on-disk bytes unavailable */
+    char           signature[96];   /* Known-signature label of the hook target module ("" if unknown) */
 } hook_entry_t;
 
 /* Scan report for a single process */
