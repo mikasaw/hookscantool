@@ -28,3 +28,7 @@ deps/imgui.zip
 
 # CMake
 CMakeUserPresets.json
+
+# Local workspace tooling (not for the public repo)
+AGENTS.md
+skills-lock.json

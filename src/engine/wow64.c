@@ -25,9 +25,20 @@ int wow64_enum_modules(uint32_t pid, process_info_t* info)
     /* WoW64 modules use the same Toolhelp32 API; just mark them as wow64 */
     int result = process_enum_modules(pid, info);
     if (result == 0) {
+        int kept = 0;
         for (int i = 0; i < info->module_count; i++) {
             info->modules[i].is_wow64 = true;
+            /* The snapshot can also contain the process's 64-bit system
+             * modules (64-bit ntdll etc.). They share names with the 32-bit
+             * ones and poison range lookups — keep only the 32-bit half. */
+            if (info->modules[i].base_addr > 0xFFFFFFFFull ||
+                (uint64_t)info->modules[i].base_addr + info->modules[i].size > 0x100000000ull)
+                continue;
+            if (kept != i)
+                info->modules[kept] = info->modules[i];
+            kept++;
         }
+        info->module_count = kept;
     }
     return result;
 }
