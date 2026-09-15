@@ -36,6 +36,7 @@ static void print_usage(const char* prog)
     printf("  --watch             Watch <pid>: rescan at --interval, alert on new hooks\n");
     printf("  --interval <sec>    Watch interval in seconds (default 30, min 1)\n");
     printf("  --deep              Scan every accessible process (no <pid> needed)\n");
+    printf("  --jobs <n>          --deep worker threads (default 4, max 32)\n");
     printf("  --version           Show version information\n");
     printf("  --help              Show this help\n");
     printf("\nWatch exit codes: 0 = clean stop, 1 = new hooks seen, 2 = target lost\n");
@@ -332,7 +333,56 @@ static void write_report_outputs(const hook_report_t* report,
     }
 }
 
-static int deep_scan(const char* json_path, bool only_with_hooks)
+/* Worker state shared by the --deep thread pool */
+typedef struct {
+    process_info_t*  procs;
+    int              proc_count;
+    hook_report_t**  reports;      /* caller-sized slot array */
+    volatile long    report_count;
+    volatile long    next_index;   /* atomic work counter */
+    volatile long    scanned;
+    volatile long    skipped;
+    volatile long    total_hooks;
+    bool             only_with_hooks;
+    CRITICAL_SECTION cs;
+} deep_shared_t;
+
+static DWORD WINAPI deep_worker(LPVOID arg)
+{
+    deep_shared_t* s = (deep_shared_t*)arg;
+
+    for (;;) {
+        long i = InterlockedIncrement(&s->next_index) - 1;
+        if (i >= s->proc_count)
+            break;
+
+        uint32_t pid = s->procs[i].pid;
+        if (pid == 0) continue;
+
+        hook_report_t* r = engine_scan_process(pid);
+        if (!r || r->error_code != 0) {
+            InterlockedIncrement(&s->skipped);
+            if (r) engine_free_report(r);
+            continue;
+        }
+
+        InterlockedIncrement(&s->scanned);
+        InterlockedAdd(&s->total_hooks, r->hook_count);
+
+        EnterCriticalSection(&s->cs);
+        s->reports[s->report_count++] = r;
+        if (s->only_with_hooks && r->hook_count == 0) {
+            printf("  [OK] %-8u %-30s (%d hooks)\n", pid, r->process_name, r->hook_count);
+        } else {
+            printf(">>> %-8u %-30s %d HOOK(S) <<<\n", pid, r->process_name, r->hook_count);
+            print_hook_report(r);
+        }
+        LeaveCriticalSection(&s->cs);
+    }
+    return 0;
+}
+
+static int deep_scan(const char* json_path, bool only_with_hooks, int jobs)
 {
     int proc_count = 0;
     process_info_t* procs = process_enum_all(&proc_count);
@@ -351,40 +401,40 @@ static int deep_scan(const char* json_path, bool only_with_hooks)
         return 1;
     }
 
-    int report_count = 0;
-    int scanned = 0, skipped = 0, total_hooks = 0;
+    deep_shared_t shared;
+    memset(&shared, 0, sizeof(shared));
+    shared.procs = procs;
+    shared.proc_count = proc_count;
+    shared.reports = reports;
+    shared.only_with_hooks = only_with_hooks;
+    InitializeCriticalSection(&shared.cs);
 
-    for (int i = 0; i < proc_count; i++) {
-        uint32_t pid = procs[i].pid;
-        if (pid == 0) continue;  /* system idle */
-
-        hook_report_t* r = engine_scan_process(pid);
-        if (!r || r->error_code != 0) {
-            skipped++;
-            if (r) engine_free_report(r);
-            continue;
-        }
-
-        scanned++;
-        total_hooks += r->hook_count;
-        reports[report_count++] = r;
-
-        if (only_with_hooks && r->hook_count == 0) {
-            printf("  [OK] %-8u %-30s (%d hooks)\n", pid, r->process_name, r->hook_count);
-        } else {
-            printf(">>> %-8u %-30s %d HOOK(S) <<<\n", pid, r->process_name, r->hook_count);
-            print_hook_report(r);
-        }
+    if (jobs > proc_count) jobs = proc_count;
+    printf("Spawning %d workers.\n", jobs);
+    HANDLE threads[MAXIMUM_WAIT_OBJECTS];
+    int thread_count = 0;
+    for (int t = 0; t < jobs - 1; t++) {
+        HANDLE th = CreateThread(NULL, 0, deep_worker, &shared, 0, NULL);
+        if (!th) break;
+        threads[thread_count++] = th;
     }
 
+    deep_worker(&shared);  /* the main thread works too */
+
+    if (thread_count > 0)
+        WaitForMultipleObjects((DWORD)thread_count, threads, TRUE, INFINITE);
+    for (int t = 0; t < thread_count; t++)
+        CloseHandle(threads[t]);
+    DeleteCriticalSection(&shared.cs);
+
     printf("\n==== Deep scan summary ====\n");
-    printf("Processes scanned: %d\n", scanned);
-    printf("Processes skipped (inaccessible/exitd): %d\n", skipped);
-    printf("Total hooks found:   %d\n", total_hooks);
+    printf("Processes scanned: %ld\n", shared.scanned);
+    printf("Processes skipped (inaccessible/exited): %ld\n", shared.skipped);
+    printf("Total hooks found:   %ld\n", shared.total_hooks);
 
     int exit_code = 0;
     if (json_path) {
-        if (engine_reports_to_json(reports, report_count, json_path) == 0) {
+        if (engine_reports_to_json(reports, (int)shared.report_count, json_path) == 0) {
             printf("\nJSON report written to: %s\n", json_path);
         } else {
             printf("\nFailed to write JSON report to: %s\n", json_path);
@@ -392,7 +442,7 @@ static int deep_scan(const char* json_path, bool only_with_hooks)
         }
     }
 
-    for (int i = 0; i < report_count; i++)
+    for (long i = 0; i < shared.report_count; i++)
         engine_free_report(reports[i]);
     free(reports);
     process_free_list(procs, proc_count);
@@ -434,6 +484,7 @@ int main(int argc, char* argv[])
     bool watch_mode = false;
     bool deep_mode = false;
     int interval_sec = 30;
+    int jobs = 4;
     uint32_t pid = 0;
 
     for (int i = 1; i < argc; i++) {
@@ -459,6 +510,15 @@ int main(int argc, char* argv[])
             }
             if (!parse_index(argv[++i], &interval_sec) || interval_sec == 0 || interval_sec > 86400) {
                 printf("Invalid interval: %s (seconds, 1-86400)\n", argv[i]);
+                return 1;
+            }
+        } else if (strcmp(argv[i], "--jobs") == 0) {
+            if (i + 1 >= argc) {
+                printf("Missing value for --jobs\n");
+                return 1;
+            }
+            if (!parse_index(argv[++i], &jobs) || jobs == 0 || jobs > 32) {
+                printf("Invalid worker count: %s (1-32)\n", argv[i]);
                 return 1;
             }
         } else if (strcmp(argv[i], "--filter") == 0) {
@@ -552,7 +612,7 @@ int main(int argc, char* argv[])
             return 1;
         }
         /* --filter s with --deep: only list processes that have hooks */
-        return deep_scan(json_path, module_filter == 1);
+        return deep_scan(json_path, module_filter == 1, jobs);
     }
 
     if (pid == 0) {
