@@ -92,9 +92,9 @@ if(MSVC)
     target_compile_options(hookscan_cli PRIVATE /W4 /wd4819 /wd4152)
     target_compile_options(hookscantool PRIVATE /W4 /wd4819 /wd4152)
     if(CMAKE_BUILD_TYPE STREQUAL "Release")
-        target_compile_options(hookscan_engine PRIVATE /O2 /GS-)
-        target_compile_options(hookscan_cli PRIVATE /O2 /GS-)
-        target_compile_options(hookscantool PRIVATE /O2 /GS-)
+        target_compile_options(hookscan_engine PRIVATE /O2)
+        target_compile_options(hookscan_cli PRIVATE /O2)
+        target_compile_options(hookscantool PRIVATE /O2)
     endif()
 elseif(CMAKE_C_COMPILER_ID STREQUAL "GNU")
     add_definitions(-D_CRT_SECURE_NO_WARNINGS)
@@ -121,6 +121,7 @@ if(HOOKSCAN_BUILD_TESTS)
         test/test_module_scorer.c
         test/test_inline_matcher.c
         test/test_cli_args.c
+        test/test_json_writer.c
         src/cli/args.c
     )
     target_include_directories(hookscan_test PRIVATE

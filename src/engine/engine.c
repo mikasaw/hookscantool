@@ -89,12 +89,21 @@ hook_report_t* engine_scan_process(uint32_t pid)
 
         /* Grow hooks array if needed */
         if (report->hook_count + 32 >= hook_cap) {
-            if (hook_cap > INT_MAX / 2) break;
+            if (hook_cap > INT_MAX / 2) {
+                report->truncated = true;
+                break;
+            }
             int new_cap = hook_cap * 2;
             size_t alloc_size = (size_t)new_cap * sizeof(hook_entry_t);
-            if (alloc_size / sizeof(hook_entry_t) != (size_t)new_cap) break;
+            if (alloc_size / sizeof(hook_entry_t) != (size_t)new_cap) {
+                report->truncated = true;
+                break;
+            }
             hook_entry_t* new_hooks = (hook_entry_t*)realloc(report->hooks, alloc_size);
-            if (!new_hooks) break;
+            if (!new_hooks) {
+                report->truncated = true;
+                break;
+            }
             hook_cap = new_cap;
             report->hooks = new_hooks;
             memset(report->hooks + report->hook_count, 0,
@@ -115,6 +124,8 @@ hook_report_t* engine_scan_process(uint32_t pid)
                                 report->hooks + report->hook_count, room);
             if (n > 0) report->hook_count += n;
             room = hook_cap - report->hook_count;
+        } else {
+            report->truncated = true;
         }
 
         /* Inline scan */
@@ -122,6 +133,8 @@ hook_report_t* engine_scan_process(uint32_t pid)
             n = inline_scan_module(process, mod,
                                    report->hooks + report->hook_count, room);
             if (n > 0) report->hook_count += n;
+        } else {
+            report->truncated = true;
         }
     }
 
@@ -235,6 +248,7 @@ static void json_write_report_body(FILE* f, const hook_report_t* report)
     fprintf(f, "    \"hook_count\": %d,\n", report->hook_count);
     fprintf(f, "    \"modules_scanned\": %d,\n", report->modules_scanned);
     fprintf(f, "    \"scan_time_ms\": %llu,\n", (unsigned long long)report->scan_time_ms);
+    fprintf(f, "    \"truncated\": %s,\n", report->truncated ? "true" : "false");
     if (report->error_code != 0) {
         fprintf(f, "    \"error_code\": %d,\n", report->error_code);
         fprintf(f, "    \"error_msg\": ");
@@ -548,12 +562,21 @@ hook_report_t* engine_scan_modules(uint32_t pid, const module_report_t* recon,
 
         /* Grow hooks array if needed */
         if (report->hook_count + 32 >= hook_cap) {
-            if (hook_cap > INT_MAX / 2) break;
+            if (hook_cap > INT_MAX / 2) {
+                report->truncated = true;
+                break;
+            }
             int new_cap = hook_cap * 2;
             size_t alloc_size = (size_t)new_cap * sizeof(hook_entry_t);
-            if (alloc_size / sizeof(hook_entry_t) != (size_t)new_cap) break;
+            if (alloc_size / sizeof(hook_entry_t) != (size_t)new_cap) {
+                report->truncated = true;
+                break;
+            }
             hook_entry_t* new_hooks = (hook_entry_t*)realloc(report->hooks, alloc_size);
-            if (!new_hooks) break;
+            if (!new_hooks) {
+                report->truncated = true;
+                break;
+            }
             hook_cap = new_cap;
             report->hooks = new_hooks;
             memset(report->hooks + report->hook_count, 0,
@@ -572,12 +595,16 @@ hook_report_t* engine_scan_modules(uint32_t pid, const module_report_t* recon,
                                 report->hooks + report->hook_count, room);
             if (n > 0) report->hook_count += n;
             room = hook_cap - report->hook_count;
+        } else {
+            report->truncated = true;
         }
 
         if (room > 0) {
             n = inline_scan_module(process, mod,
                                    report->hooks + report->hook_count, room);
             if (n > 0) report->hook_count += n;
+        } else {
+            report->truncated = true;
         }
     }
 

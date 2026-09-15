@@ -43,6 +43,7 @@ typedef struct {
     int           hook_count;
     uint64_t      scan_time_ms;     /* Time taken for the scan */
     int           modules_scanned;  /* Number of DLLs scanned */
+    bool          truncated;        /* True if the hook buffer filled and results may be incomplete */
     int           error_code;       /* 0 = success, non-zero = engine error */
     char          error_msg[128];   /* Human-readable error if error_code != 0 */
 } hook_report_t;
@@ -82,12 +83,18 @@ typedef struct {
     char             error_msg[128];
 } module_report_t;
 
-/* Engine error codes */
+/* Engine error codes (reported via hook_report_t/module_report_t error_code) */
 #define ENGINE_OK                0
 #define ENGINE_ACCESS_DENIED    -1
 #define ENGINE_PROCESS_NOT_FOUND -2
+/* Reserved, not currently emitted: read/write failures inside scanners are
+ * treated as "no hook detected" for that function, and restore failures are
+ * surfaced by engine_restore_hook returning false. Kept for future use so
+ * the numeric contract stays stable. */
 #define ENGINE_READ_ERROR       -3
 #define ENGINE_WRITE_ERROR      -4
+/* Reserved: packed images are signalled per-hook via restorable=false
+ * instead of failing the whole scan. */
 #define ENGINE_PACKED_DLL       -5
 #define ENGINE_NO_MEMORY        -6
 #define ENGINE_SCAN_FAILED      -7

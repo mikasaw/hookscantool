@@ -71,7 +71,11 @@ static void print_hook_report(const hook_report_t* report)
     printf("\nProcess: %s (PID %u)\n", report->process_name, report->pid);
     printf("Modules scanned: %d\n", report->modules_scanned);
     printf("Scan time: %llu ms\n", (unsigned long long)report->scan_time_ms);
-    printf("Hooks found: %d\n\n", report->hook_count);
+    printf("Hooks found: %d\n", report->hook_count);
+    if (report->truncated) {
+        printf("WARNING: hook buffer filled up — results may be incomplete.\n");
+    }
+    printf("\n");
 
     if (report->hook_count == 0) {
         printf("No hooks detected.\n");
