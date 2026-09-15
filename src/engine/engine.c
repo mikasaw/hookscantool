@@ -51,7 +51,7 @@ hook_report_t* engine_scan_process(uint32_t pid)
     if (GetProcessImageFileNameW(process, name_buf, 64) > 0) {
         WCHAR* slash = wcsrchr(name_buf, L'\\');
         if (slash) slash++; else slash = name_buf;
-        WideCharToMultiByte(CP_ACP, 0, slash, -1,
+        WideCharToMultiByte(CP_UTF8, 0, slash, -1,
                            pinfo.name, sizeof(pinfo.name), NULL, NULL);
     }
 
@@ -237,6 +237,7 @@ int engine_report_to_json(const hook_report_t* report, const char* path)
     if (!f) return -1;
 
     fprintf(f, "{\n");
+    fprintf(f, "  \"schema_version\": 1,\n");
     fprintf(f, "  \"pid\": %u,\n", report->pid);
     fprintf(f, "  \"process_name\": ");
     json_write_string(f, report->process_name);
@@ -244,6 +245,12 @@ int engine_report_to_json(const hook_report_t* report, const char* path)
     fprintf(f, "  \"hook_count\": %d,\n", report->hook_count);
     fprintf(f, "  \"modules_scanned\": %d,\n", report->modules_scanned);
     fprintf(f, "  \"scan_time_ms\": %llu,\n", (unsigned long long)report->scan_time_ms);
+    if (report->error_code != 0) {
+        fprintf(f, "  \"error_code\": %d,\n", report->error_code);
+        fprintf(f, "  \"error_msg\": ");
+        json_write_string(f, report->error_msg);
+        fprintf(f, ",\n");
+    }
     fprintf(f, "  \"hooks\": [\n");
 
     for (int i = 0; i < report->hook_count; i++) {
@@ -282,7 +289,7 @@ int engine_report_to_json(const hook_report_t* report, const char* path)
 
         fprintf(f, "      \"chain\": [\n");
 
-        for (int j = 0; j < h->chain_depth; j++) {
+        for (int j = 0; h->chain && j < h->chain_depth; j++) {
             fprintf(f, "        {\"address\": \"0x%016llX\", \"disasm\": ", (unsigned long long)h->chain[j].address);
             json_write_string(f, h->chain[j].disasm);
             fprintf(f, "}%s\n", (j < h->chain_depth - 1) ? "," : "");
@@ -294,8 +301,12 @@ int engine_report_to_json(const hook_report_t* report, const char* path)
 
     fprintf(f, "  ]\n");
     fprintf(f, "}\n");
-    fclose(f);
-    return 0;
+
+    /* ferror catches any failed write since open (disk full, etc.) */
+    bool ok = ferror(f) == 0;
+    if (fclose(f) != 0)
+        ok = false;
+    return ok ? 0 : -1;
 }
 
 void engine_free_report(hook_report_t* report)
@@ -347,7 +358,7 @@ module_report_t* engine_recon_process(uint32_t pid)
     if (GetProcessImageFileNameW(process, name_buf, 64) > 0) {
         WCHAR* slash = wcsrchr(name_buf, L'\\');
         if (slash) slash++; else slash = name_buf;
-        WideCharToMultiByte(CP_ACP, 0, slash, -1,
+        WideCharToMultiByte(CP_UTF8, 0, slash, -1,
                            pinfo.name, sizeof(pinfo.name), NULL, NULL);
     }
 

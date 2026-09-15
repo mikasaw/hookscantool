@@ -37,7 +37,7 @@ process_info_t* process_enum_all(int* count)
         do {
             list[i].pid = pe.th32ProcessID;
             /* Convert wide name to ASCII (best effort for common names) */
-            WideCharToMultiByte(CP_ACP, 0, pe.szExeFile, -1,
+            WideCharToMultiByte(CP_UTF8, 0, pe.szExeFile, -1,
                                list[i].name, sizeof(list[i].name), NULL, NULL);
             i++;
         } while (Process32NextW(snap, &pe) && i < total);
@@ -80,9 +80,9 @@ int process_enum_modules(uint32_t pid, process_info_t* info)
     if (Module32FirstW(snap, &me)) {
         int i = 0;
         do {
-            WideCharToMultiByte(CP_ACP, 0, me.szModule, -1,
+            WideCharToMultiByte(CP_UTF8, 0, me.szModule, -1,
                                info->modules[i].name, sizeof(info->modules[i].name), NULL, NULL);
-            WideCharToMultiByte(CP_ACP, 0, me.szExePath, -1,
+            WideCharToMultiByte(CP_UTF8, 0, me.szExePath, -1,
                                info->modules[i].path, sizeof(info->modules[i].path), NULL, NULL);
             info->modules[i].base_addr = (uintptr_t)me.modBaseAddr;
             info->modules[i].size      = me.modBaseSize;
@@ -110,7 +110,7 @@ int process_get_info(uint32_t pid, process_info_t* info)
         /* Extract just the filename from the full path */
         WCHAR* slash = wcsrchr(name_buf, L'\\');
         if (slash) slash++; else slash = name_buf;
-        WideCharToMultiByte(CP_ACP, 0, slash, -1,
+        WideCharToMultiByte(CP_UTF8, 0, slash, -1,
                            info->name, sizeof(info->name), NULL, NULL);
     }
     CloseHandle(proc);
