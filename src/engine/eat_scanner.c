@@ -76,18 +76,28 @@ int eat_scan_module(HANDLE process, const module_info_t* mod,
         if (mem_func_rva >= export_rva && mem_func_rva < export_rva + export_size)
             continue;
 
-        /* Find the same export in the on-disk image */
+        /* Find the same export in the on-disk image. A name can legitimately
+         * be exported several times (aliases pointing at different RVAs —
+         * common in the MSVC runtime DLLs); only if the in-memory RVA differs
+         * from EVERY on-disk occurrence is the export table actually hooked. */
         uint32_t disk_func_rva = 0;
         bool found_in_disk = false;
+        bool rva_is_alias = false;
         for (int j = 0; j < disk_image.export_count; j++) {
             if (strcmp(disk_image.exports[j].name, func_name) == 0) {
-                disk_func_rva = (uint32_t)disk_image.exports[j].rva;
-                found_in_disk = true;
-                break;
+                if (!found_in_disk) {
+                    disk_func_rva = (uint32_t)disk_image.exports[j].rva;
+                    found_in_disk = true;
+                }
+                if ((uint32_t)disk_image.exports[j].rva == mem_func_rva) {
+                    rva_is_alias = true;
+                    break;
+                }
             }
         }
 
         if (!found_in_disk) continue;
+        if (rva_is_alias) continue;
 
         /* Compare: if RVAs differ, it's an EAT hook */
         if (mem_func_rva != disk_func_rva) {

@@ -194,9 +194,17 @@ int inline_scan_module(HANDLE process, const module_info_t* mod,
         bool found_in_disk = false;
         for (int j = 0; j < disk_image.export_count; j++) {
             if (strcmp(disk_image.exports[j].name, func_name) == 0) {
-                disk_func_rva = (uint32_t)disk_image.exports[j].rva;
-                found_in_disk = true;
-                break;
+                if (!found_in_disk) {
+                    /* first occurrence is the fallback for EAT-redirect checks */
+                    disk_func_rva = (uint32_t)disk_image.exports[j].rva;
+                    found_in_disk = true;
+                }
+                /* export aliases: pair the in-memory RVA with its own
+                 * on-disk occurrence so prologues are compared correctly */
+                if ((uint32_t)disk_image.exports[j].rva == mem_func_rva) {
+                    disk_func_rva = (uint32_t)disk_image.exports[j].rva;
+                    break;
+                }
             }
         }
         if (!found_in_disk) continue;
