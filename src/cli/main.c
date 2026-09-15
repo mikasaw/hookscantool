@@ -24,6 +24,7 @@ static void print_usage(const char* prog)
 {
     printf("HookScanTool v%s - Windows Process Hook Scanner\n\n", HOOKSCAN_VERSION);
     printf("Usage: %s <pid> [options]\n", prog);
+    printf("       %s --deep [options]\n", prog);
     printf("Options:\n");
     printf("  --json <path>       Write JSON report to file\n");
     printf("  --restore <n>       Restore hook #n (0-indexed)\n");
@@ -31,8 +32,12 @@ static void print_usage(const char* prog)
     printf("  --modules           List modules with suspicion scores (uses recon)\n");
     printf("  --scan-module <n>   Scan a specific module by index\n");
     printf("  --filter <s|a|m>    Filter modules: s=suspicious, a=all, m=non-microsoft (with --modules)\n");
+    printf("  --watch             Watch <pid>: rescan at --interval, alert on new hooks\n");
+    printf("  --interval <sec>    Watch interval in seconds (default 30, min 1)\n");
+    printf("  --deep              Scan every accessible process (no <pid> needed)\n");
     printf("  --version           Show version information\n");
     printf("  --help              Show this help\n");
+    printf("\nWatch exit codes: 0 = clean stop, 1 = new hooks seen, 2 = target lost\n");
 }
 
 static void print_version(void)
@@ -147,6 +152,216 @@ static void list_modules(uint32_t pid, int filter)
     engine_free_module_report(recon);
 }
 
+/* --- --watch: poll a process and report newly appearing hooks --- */
+
+static volatile bool g_watch_stop = false;
+
+static BOOL WINAPI watch_ctrl_handler(DWORD type)
+{
+    (void)type;
+    g_watch_stop = true;
+    return TRUE;
+}
+
+/* Identity of a hook for diffing between rounds */
+typedef struct {
+    char             module[64];
+    char             function[128];
+    hook_type_t      type;
+    unsigned long long addr;
+} hook_key_t;
+
+static int build_hook_keys(const hook_report_t* r, hook_key_t** out)
+{
+    *out = NULL;
+    if (!r || r->hook_count <= 0) return 0;
+    hook_key_t* keys = (hook_key_t*)calloc((size_t)r->hook_count, sizeof(hook_key_t));
+    if (!keys) return -1;
+    for (int i = 0; i < r->hook_count; i++) {
+        const hook_entry_t* h = &r->hooks[i];
+        snprintf(keys[i].module, sizeof(keys[i].module), "%s", h->module_name);
+        snprintf(keys[i].function, sizeof(keys[i].function), "%s", h->function_name);
+        keys[i].type = h->type;
+        keys[i].addr = (unsigned long long)h->current_addr;
+    }
+    *out = keys;
+    return r->hook_count;
+}
+
+static bool hook_key_present(const hook_key_t* keys, int n, const hook_key_t* k)
+{
+    for (int i = 0; i < n; i++) {
+        if (keys[i].type == k->type && keys[i].addr == k->addr &&
+            strcmp(keys[i].module, k->module) == 0 &&
+            strcmp(keys[i].function, k->function) == 0)
+            return true;
+    }
+    return false;
+}
+
+static int watch_process(uint32_t pid, int interval_sec, const char* json_path)
+{
+    SetConsoleCtrlHandler(watch_ctrl_handler, TRUE);
+    printf("Watching PID %u for new hooks (interval %ds). Press Ctrl+C to stop.\n",
+           pid, interval_sec);
+
+    hook_key_t* prev = NULL;
+    int prev_count = 0;
+    bool new_seen = false;
+    bool json_warned = false;
+    int round = 0;
+
+    while (!g_watch_stop) {
+        hook_report_t* r = engine_scan_process(pid);
+        if (!r) {
+            printf("\nScan failed (out of memory). Stopping watch.\n");
+            free(prev);
+            return 2;
+        }
+        if (r->error_code != 0) {
+            printf("\nProcess %u no longer scannable: %s\nStopping watch.\n",
+                   pid, r->error_msg);
+            engine_free_report(r);
+            free(prev);
+            return 2;
+        }
+
+        hook_key_t* cur = NULL;
+        int cur_count = build_hook_keys(r, &cur);
+        if (cur_count < 0) {
+            printf("\nOut of memory building hook list. Stopping watch.\n");
+            engine_free_report(r);
+            free(prev);
+            return 2;
+        }
+
+        if (round == 0) {
+            printf("\n=== Baseline (round 1): %d hooks ===\n", r->hook_count);
+            print_hook_report(r);
+        } else {
+            int new_count = 0;
+            for (int i = 0; i < cur_count; i++) {
+                if (!hook_key_present(prev, prev_count, &cur[i])) {
+                    if (new_count == 0)
+                        printf("\n!!! NEW HOOKS DETECTED on PID %u !!!\n", pid);
+                    const hook_entry_t* h = &r->hooks[i];
+                    printf("  [%s] %s!%s at 0x%016llx\n",
+                           hook_type_str(h->type), h->module_name,
+                           h->function_name, (unsigned long long)h->current_addr);
+                    for (int c = 0; c < h->chain_depth; c++) {
+                        printf("      #%d 0x%016llx: %s\n", c,
+                               (unsigned long long)h->chain[c].address,
+                               h->chain[c].disasm);
+                    }
+                    new_count++;
+                }
+            }
+            if (new_count > 0) {
+                new_seen = true;
+                printf("Total hooks now: %d (%d new)\n", r->hook_count, new_count);
+            } else {
+                printf("\r[%2d] %s: %d hooks (no change)   \n",
+                       round, r->process_name, r->hook_count);
+            }
+        }
+
+        free(prev);
+        prev = cur;
+        prev_count = cur_count;
+
+        /* Keep the JSON file reflecting the latest scan while watching */
+        if (json_path && engine_report_to_json(r, json_path) != 0) {
+            if (!json_warned) {
+                printf("Warning: failed to write JSON report to %s\n", json_path);
+                json_warned = true;
+            }
+        }
+
+        engine_free_report(r);
+        round++;
+
+        /* Sleep in 1s slices so Ctrl+C reacts quickly */
+        for (int s = 0; s < interval_sec && !g_watch_stop; s++)
+            Sleep(1000);
+    }
+
+    SetConsoleCtrlHandler(watch_ctrl_handler, FALSE);
+    printf("\nWatch stopped. %s\n",
+           new_seen ? "New hooks were detected during monitoring."
+                    : "No new hooks detected.");
+    free(prev);
+    return new_seen ? 1 : 0;
+}
+
+/* --- --deep: scan every accessible process --- */
+
+static int deep_scan(const char* json_path, bool only_with_hooks)
+{
+    int proc_count = 0;
+    process_info_t* procs = process_enum_all(&proc_count);
+    if (!procs || proc_count == 0) {
+        printf("Failed to enumerate processes.\n");
+        free(procs);
+        return 1;
+    }
+
+    printf("Deep scan: %d processes found. This can take a while.\n\n", proc_count);
+
+    hook_report_t** reports = (hook_report_t**)calloc((size_t)proc_count, sizeof(hook_report_t*));
+    if (!reports) {
+        printf("Out of memory.\n");
+        process_free_list(procs, proc_count);
+        return 1;
+    }
+
+    int report_count = 0;
+    int scanned = 0, skipped = 0, total_hooks = 0;
+
+    for (int i = 0; i < proc_count; i++) {
+        uint32_t pid = procs[i].pid;
+        if (pid == 0) continue;  /* system idle */
+
+        hook_report_t* r = engine_scan_process(pid);
+        if (!r || r->error_code != 0) {
+            skipped++;
+            if (r) engine_free_report(r);
+            continue;
+        }
+
+        scanned++;
+        total_hooks += r->hook_count;
+        reports[report_count++] = r;
+
+        if (only_with_hooks && r->hook_count == 0) {
+            printf("  [OK] %-8u %-30s (%d hooks)\n", pid, r->process_name, r->hook_count);
+        } else {
+            printf(">>> %-8u %-30s %d HOOK(S) <<<\n", pid, r->process_name, r->hook_count);
+            print_hook_report(r);
+        }
+    }
+
+    printf("\n==== Deep scan summary ====\n");
+    printf("Processes scanned: %d\n", scanned);
+    printf("Processes skipped (inaccessible/exitd): %d\n", skipped);
+    printf("Total hooks found:   %d\n", total_hooks);
+
+    int exit_code = 0;
+    if (json_path) {
+        if (engine_reports_to_json(reports, report_count, json_path) == 0) {
+            printf("\nJSON report written to: %s\n", json_path);
+        } else {
+            printf("\nFailed to write JSON report to: %s\n", json_path);
+            exit_code = 1;
+        }
+    }
+
+    for (int i = 0; i < report_count; i++)
+        engine_free_report(reports[i]);
+    free(reports);
+    process_free_list(procs, proc_count);
+    return exit_code;
+}
+
 int main(int argc, char* argv[])
 {
     /* Process/module names arrive as UTF-8 — match the console to them */
@@ -177,6 +392,9 @@ int main(int argc, char* argv[])
     int scan_module_idx = -1;
     bool show_modules = false;
     int module_filter = 0; /* 0=all, 1=suspicious, 2=non-microsoft */
+    bool watch_mode = false;
+    bool deep_mode = false;
+    int interval_sec = 30;
     uint32_t pid = 0;
 
     for (int i = 1; i < argc; i++) {
@@ -191,6 +409,19 @@ int main(int argc, char* argv[])
             return 0;
         } else if (strcmp(argv[i], "--modules") == 0) {
             show_modules = true;
+        } else if (strcmp(argv[i], "--watch") == 0) {
+            watch_mode = true;
+        } else if (strcmp(argv[i], "--deep") == 0) {
+            deep_mode = true;
+        } else if (strcmp(argv[i], "--interval") == 0) {
+            if (i + 1 >= argc) {
+                printf("Missing value for --interval\n");
+                return 1;
+            }
+            if (!parse_index(argv[++i], &interval_sec) || interval_sec == 0 || interval_sec > 86400) {
+                printf("Invalid interval: %s (seconds, 1-86400)\n", argv[i]);
+                return 1;
+            }
         } else if (strcmp(argv[i], "--filter") == 0) {
             if (i + 1 >= argc) {
                 printf("Missing value for --filter\n");
@@ -255,9 +486,32 @@ int main(int argc, char* argv[])
         }
     }
 
+    /* Handle --deep: scan all processes, no PID required */
+    if (deep_mode) {
+        if (pid != 0) {
+            printf("--deep scans every process; do not specify a PID with it.\n");
+            return 1;
+        }
+        if (watch_mode || scan_module_idx >= 0 || show_modules || restore_idx >= 0) {
+            printf("--deep cannot be combined with --watch/--modules/--scan-module/--restore.\n");
+            return 1;
+        }
+        /* --filter s with --deep: only list processes that have hooks */
+        return deep_scan(json_path, module_filter == 1);
+    }
+
     if (pid == 0) {
         print_usage(argv[0]);
         return 1;
+    }
+
+    /* Handle --watch: rescan loop */
+    if (watch_mode) {
+        if (scan_module_idx >= 0 || show_modules || restore_idx >= 0) {
+            printf("--watch cannot be combined with --modules/--scan-module/--restore.\n");
+            return 1;
+        }
+        return watch_process(pid, interval_sec, json_path);
     }
 
     /* Handle --modules (recon only, no scan) */
