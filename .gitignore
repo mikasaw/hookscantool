@@ -1,9 +1,30 @@
+# Build directories
 build/
+build2/
 build3/
-deps/zydis.zip
-deps/imgui.zip
+build-msvc/
+
+# Build artifacts
 *.exe
 *.obj
 *.o
 *.a
 *.lib
+*.i
+*.pdb
+*.ilk
+
+# Dependency archives
+deps/zydis.zip
+deps/imgui.zip
+
+# Local AI assistant configs (contain secrets — never commit)
+.claude/
+.codex/
+.agents/
+.gstack/
+.codeartsdoer/
+.zcode/
+
+# CMake
+CMakeUserPresets.json
