@@ -3,57 +3,85 @@
 #include <stdlib.h>
 #include <string.h>
 
-/* Suspend all threads in a target process.
+/* Resume all previously suspended threads and close handles */
+static void resume_threads(HANDLE* threads, int count);
+
+/* Suspend all threads in a target process, catching threads created
+ * between the two enumeration passes. Any failure (OpenThread,
+ * SuspendThread) is fatal and suspends already acquired are undone:
+ * writing while an unknown thread may run through the patched region
+ * could crash the target.
  * Returns array of thread handles and count, or NULL on error.
  * Caller must resume via resume_threads and free the array. */
 static HANDLE* suspend_threads(uint32_t pid, int* count)
 {
     *count = 0;
 
-    HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
-    if (snap == INVALID_HANDLE_VALUE)
-        return NULL;
+    HANDLE* threads = NULL;
+    DWORD*  tids    = NULL;
+    int     cap     = 0;
 
-    /* Count threads belonging to this process */
-    THREADENTRY32 te;
-    te.dwSize = sizeof(te);
-    int total = 0;
-    if (Thread32First(snap, &te)) {
+    for (int pass = 0; pass < 2; pass++) {
+        HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
+        if (snap == INVALID_HANDLE_VALUE)
+            goto fail;
+
+        THREADENTRY32 te;
+        te.dwSize = sizeof(te);
+        if (!Thread32First(snap, &te)) {
+            CloseHandle(snap);
+            goto fail;
+        }
+
         do {
-            if (te.th32OwnerProcessID == pid)
-                total++;
-        } while (Thread32Next(snap, &te));
-    }
+            if (te.th32OwnerProcessID != pid)
+                continue;
 
-    if (total == 0) {
-        CloseHandle(snap);
-        return NULL;
-    }
-
-    HANDLE* threads = (HANDLE*)calloc(total, sizeof(HANDLE));
-    if (!threads) {
-        CloseHandle(snap);
-        return NULL;
-    }
-
-    /* Suspend each thread */
-    if (Thread32First(snap, &te)) {
-        int i = 0;
-        do {
-            if (te.th32OwnerProcessID == pid && i < total) {
-                HANDLE t = OpenThread(THREAD_SUSPEND_RESUME,
-                                      FALSE, te.th32ThreadID);
-                if (t) {
-                    SuspendThread(t);
-                    threads[i++] = t;
-                }
+            bool already = false;
+            for (int i = 0; i < *count; i++) {
+                if (tids[i] == te.th32ThreadID) { already = true; break; }
             }
+            if (already)
+                continue;
+
+            if (*count == cap) {
+                int new_cap = cap ? cap * 2 : 16;
+                HANDLE* nt = (HANDLE*)realloc(threads, (size_t)new_cap * sizeof(HANDLE));
+                if (!nt) { CloseHandle(snap); goto fail; }
+                threads = nt;
+                DWORD* ni = (DWORD*)realloc(tids, (size_t)new_cap * sizeof(DWORD));
+                if (!ni) { CloseHandle(snap); goto fail; }
+                tids = ni;
+                cap = new_cap;
+            }
+
+            HANDLE t = OpenThread(THREAD_SUSPEND_RESUME, FALSE, te.th32ThreadID);
+            if (!t) { CloseHandle(snap); goto fail; }
+            if (SuspendThread(t) == (DWORD)-1) {
+                CloseHandle(t);
+                CloseHandle(snap);
+                goto fail;
+            }
+            threads[*count] = t;
+            tids[*count]    = te.th32ThreadID;
+            (*count)++;
         } while (Thread32Next(snap, &te));
-        *count = i;
+
+        CloseHandle(snap);
     }
 
-    CloseHandle(snap);
+    free(tids);
+    if (*count == 0) {
+        free(threads);
+        return NULL;
+    }
     return threads;
+
+fail:
+    if (threads)
+        resume_threads(threads, *count);
+    free(tids);
+    return NULL;
 }
 
 /* Resume all previously suspended threads and close handles */
@@ -64,6 +92,21 @@ static void resume_threads(HANDLE* threads, int count)
         CloseHandle(threads[i]);
     }
     free(threads);
+}
+
+/* Read len bytes back from the target and compare against expected */
+static bool verify_memory(HANDLE process, uint64_t addr,
+                          const uint8_t* expected, int len)
+{
+    uint8_t buf[64];
+    SIZE_T read = 0;
+    if (len <= 0 || len > (int)sizeof(buf))
+        return false;
+    if (!ReadProcessMemory(process, (LPCVOID)(uintptr_t)addr,
+                           buf, (SIZE_T)len, &read) ||
+        read != (SIZE_T)len)
+        return false;
+    return memcmp(buf, expected, (size_t)len) == 0;
 }
 
 bool restore_hook(HANDLE process, uint32_t pid, hook_entry_t* entry)
@@ -88,7 +131,7 @@ bool restore_hook(HANDLE process, uint32_t pid, hook_entry_t* entry)
 
     /* Change memory protection to writable */
     DWORD old_protect;
-    if (!VirtualProtectEx(process, (LPVOID)entry->current_addr,
+    if (!VirtualProtectEx(process, (LPVOID)(uintptr_t)entry->current_addr,
                           entry->original_byte_count,
                           PAGE_EXECUTE_READWRITE, &old_protect)) {
         resume_threads(threads, thread_count);
@@ -97,20 +140,14 @@ bool restore_hook(HANDLE process, uint32_t pid, hook_entry_t* entry)
 
     /* Re-read current bytes and verify the hook is still present (TOCTOU check).
      * Another thread could have restored or modified the bytes between the scan
-     * and now. Writing original bytes over a different hook would corrupt code. */
-    uint8_t current_bytes[64];
-    SIZE_T current_read = 0;
-    if (entry->original_byte_count <= (int)sizeof(current_bytes)) {
-        ReadProcessMemory(process, (LPVOID)entry->current_addr,
-                          current_bytes, (SIZE_T)entry->original_byte_count,
-                          &current_read);
-    }
-    if (current_read != (SIZE_T)entry->original_byte_count ||
-        memcmp(current_bytes, entry->hooked_bytes,
-               (size_t)(entry->original_byte_count < entry->hooked_byte_count ?
-                        entry->original_byte_count : entry->hooked_byte_count)) != 0) {
+     * and now. Writing original bytes over a different hook would corrupt code.
+     * Compare the region we are about to overwrite against the hook bytes
+     * recorded at scan time. */
+    if (!verify_memory(process, entry->current_addr, entry->hooked_bytes,
+                       entry->original_byte_count < entry->hooked_byte_count ?
+                           entry->original_byte_count : entry->hooked_byte_count)) {
         /* Hook bytes changed since scan — abort to avoid corrupting code */
-        VirtualProtectEx(process, (LPVOID)entry->current_addr,
+        VirtualProtectEx(process, (LPVOID)(uintptr_t)entry->current_addr,
                          entry->original_byte_count, old_protect, &old_protect);
         resume_threads(threads, thread_count);
         return false;
@@ -118,24 +155,50 @@ bool restore_hook(HANDLE process, uint32_t pid, hook_entry_t* entry)
 
     /* Write original bytes */
     SIZE_T written = 0;
-    bool write_ok = WriteProcessMemory(process, (LPVOID)entry->current_addr,
+    bool write_ok = WriteProcessMemory(process, (LPVOID)(uintptr_t)entry->current_addr,
                                         entry->original_bytes,
                                         (SIZE_T)entry->original_byte_count,
-                                        &written);
+                                        &written) &&
+                    written == (SIZE_T)entry->original_byte_count;
+
+    /* Verify the write landed; a partial write leaves the target in a
+     * mixed-bytes state that would likely crash on next execution. */
+    if (write_ok)
+        write_ok = verify_memory(process, entry->current_addr,
+                                 entry->original_bytes, entry->original_byte_count);
+
+    if (!write_ok) {
+        /* Roll back to the full hooked state recorded at scan time so the
+         * target keeps running the (still-hooked) function instead of on
+         * half-restored bytes. Best effort: if the rollback write itself
+         * fails there is nothing further to do from here. */
+        SIZE_T rb_written = 0;
+        if (WriteProcessMemory(process, (LPVOID)(uintptr_t)entry->current_addr,
+                               entry->hooked_bytes,
+                               (SIZE_T)entry->hooked_byte_count,
+                               &rb_written) &&
+            rb_written == (SIZE_T)entry->hooked_byte_count) {
+            verify_memory(process, entry->current_addr,
+                          entry->hooked_bytes, entry->hooked_byte_count);
+        }
+        FlushInstructionCache(process, (LPCVOID)(uintptr_t)entry->current_addr,
+                              (SIZE_T)entry->hooked_byte_count);
+        VirtualProtectEx(process, (LPVOID)(uintptr_t)entry->current_addr,
+                         entry->original_byte_count, old_protect, &old_protect);
+        resume_threads(threads, thread_count);
+        return false;
+    }
 
     /* Restore original protection */
-    VirtualProtectEx(process, (LPVOID)entry->current_addr,
+    VirtualProtectEx(process, (LPVOID)(uintptr_t)entry->current_addr,
                      entry->original_byte_count, old_protect, &old_protect);
 
     /* Flush instruction cache */
-    FlushInstructionCache(process, (LPCVOID)entry->current_addr,
+    FlushInstructionCache(process, (LPCVOID)(uintptr_t)entry->current_addr,
                           (SIZE_T)entry->original_byte_count);
 
     /* Resume threads */
     resume_threads(threads, thread_count);
-
-    if (!write_ok || written != (SIZE_T)entry->original_byte_count)
-        return false;
 
     /* Mark as no longer hooked */
     entry->restorable = false;
