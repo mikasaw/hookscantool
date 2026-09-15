@@ -76,7 +76,15 @@ void pe_unmap_disk_image(uint8_t* mapped_data, size_t mapped_size);
 int pe_rva_to_offset(const pe_image_t* image, uintptr_t rva, uint32_t* offset);
 
 /*
- * Convert a file offset to an RVA using section table.
+ * Decide whether a string is an export forwarder target ("TARGETDLL.Function"
+ * or "TARGETDLL.#123"): printable ASCII, one dot, non-empty DLL and function
+ * parts. Used by the IAT scanner to follow loader forwarder resolution.
+ * On match, copies the target DLL (part before the dot) into target_dll.
+ */
+bool pe_is_forwarder_string(const char* s, char* target_dll, size_t cap);
+
+/*
+ * Convert an offset to an RVA using section table.
  * Returns 0 on success, non-zero if offset is invalid.
  */
 int pe_offset_to_rva(const pe_image_t* image, uint32_t offset, uintptr_t* rva);

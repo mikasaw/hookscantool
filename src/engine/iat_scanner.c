@@ -126,41 +126,83 @@ int iat_scan_module(HANDLE process, uint32_t pid, const module_info_t* mod,
 
             if (func_ptr == 0) continue;
 
-            /* Check: does the function pointer point outside the imported DLL? */
-            if (dll_found && (func_ptr < dll_base || func_ptr >= dll_base + dll_size)) {
+            /* Only entries pointing outside the imported DLL can be hooks */
+            if (!dll_found ||
+                (func_ptr >= dll_base && func_ptr < dll_base + dll_size))
+                continue;
+
+            /* Function name from the OriginalFirstThunk array (parallel
+             * to the IAT; fall back to the IAT itself for bound imports) */
+            char fname[128] = {0};
+            uintptr_t name_thunk = desc.OriginalFirstThunk ? desc.OriginalFirstThunk : desc.FirstThunk;
+            if (name_thunk != 0) {
+                uintptr_t oft_addr = mod->base_addr + name_thunk + j * thunk_size;
+                uintptr_t thunk_val = 0;
+                if (ReadProcessMemory(process, (LPCVOID)oft_addr, &thunk_val, thunk_size, NULL) && thunk_val != 0) {
+                    if (!(thunk_val & ordinal_flag)) {
+                        /* Import by name: low 32 bits are the hint/name RVA */
+                        uint32_t name_rva_32 = (uint32_t)thunk_val;
+                        uintptr_t name_addr = mod->base_addr + name_rva_32 + 2;
+                        ReadProcessMemory(process, (LPCVOID)name_addr, fname, sizeof(fname) - 1, NULL);
+                    } else {
+                        snprintf(fname, sizeof(fname), "Ordinal_%u",
+                                 (unsigned)(thunk_val & 0xFFFF));
+                    }
+                }
+            }
+
+            /* Follow on-disk export forwarders: "KERNEL32!InitializeSListHead"
+             * forwards to "NTDLL.RtlInitializeSListHead", so the loader
+             * legitimately points the IAT outside KERNEL32. If the named
+             * export forwards to a DLL whose range contains the pointer,
+             * this is the loader doing its job, not a hook. */
+            if (have_disk && fname[0] != '\0') {
+                for (int k = 0; k < disk_image.export_count; k++) {
+                    if (strcmp(disk_image.exports[k].name, fname) != 0)
+                        continue;
+
+                    uint32_t fwd_off = 0;
+                    if (pe_rva_to_offset(&disk_image,
+                                         (uint32_t)disk_image.exports[k].rva,
+                                         &fwd_off) == 0 &&
+                        (size_t)fwd_off + 64 <= disk_size) {
+                        char fwd_str[65];
+                        memcpy(fwd_str, disk_data + fwd_off, 64);
+                        fwd_str[64] = '\0';
+                        char fwd_dll[48];
+                        if (pe_is_forwarder_string(fwd_str, fwd_dll, sizeof(fwd_dll))) {
+                            uintptr_t fwd_base = 0;
+                            uint32_t  fwd_size = 0;
+                            /* forwarder names omit the ".dll" suffix */
+                            if (!find_module_range(pinfo, fwd_dll, &fwd_base, &fwd_size)) {
+                                char fwd_dll_ext[56];
+                                snprintf(fwd_dll_ext, sizeof(fwd_dll_ext), "%s.dll", fwd_dll);
+                                find_module_range(pinfo, fwd_dll_ext, &fwd_base, &fwd_size);
+                            }
+                            if (fwd_size != 0 &&
+                                func_ptr >= fwd_base && func_ptr < fwd_base + fwd_size)
+                                goto next_thunk; /* loader-resolved forwarder */
+                        }
+                    }
+                    break; /* export found, not a benign forwarder */
+                }
+            }
+
+            {
+                /* Flag as an IAT hook */
                 hook_entry_t* h = &hooks[found];
                 memset(h, 0, sizeof(*h));
 
                 strncpy(h->module_name, dll_name, sizeof(h->module_name) - 1);
+                strncpy(h->function_name, fname, sizeof(h->function_name) - 1);
                 h->type = HOOK_IAT;
                 h->current_addr = func_ptr;
                 h->restorable = false;
 
-                /* Function name from the OriginalFirstThunk array (parallel
-                 * to the IAT; fall back to the IAT itself for bound imports) */
-                uintptr_t name_thunk = desc.OriginalFirstThunk ? desc.OriginalFirstThunk : desc.FirstThunk;
-                if (name_thunk != 0) {
-                    uintptr_t oft_addr = mod->base_addr + name_thunk + j * thunk_size;
-                    uintptr_t thunk_val = 0;
-                    if (ReadProcessMemory(process, (LPCVOID)oft_addr, &thunk_val, thunk_size, NULL) && thunk_val != 0) {
-                        if (!(thunk_val & ordinal_flag)) {
-                            /* Import by name: low 32 bits are the hint/name RVA */
-                            uint32_t name_rva_32 = (uint32_t)thunk_val;
-                            uintptr_t name_addr = mod->base_addr + name_rva_32 + 2;
-                            char fname[128] = {0};
-                            ReadProcessMemory(process, (LPCVOID)name_addr, fname, sizeof(fname) - 1, NULL);
-                            strncpy(h->function_name, fname, sizeof(h->function_name) - 1);
-                        } else {
-                            snprintf(h->function_name, sizeof(h->function_name), "Ordinal_%u",
-                                     (unsigned)(thunk_val & 0xFFFF));
-                        }
-                    }
-                }
-
                 /* Resolve original address and bytes from cached on-disk DLL */
-                if (have_disk && h->function_name[0] != '\0') {
+                if (have_disk && fname[0] != '\0') {
                     for (int k = 0; k < disk_image.export_count; k++) {
-                        if (strcmp(disk_image.exports[k].name, h->function_name) == 0) {
+                        if (strcmp(disk_image.exports[k].name, fname) == 0) {
                             uintptr_t disk_rva = disk_image.exports[k].rva;
                             h->original_addr = dll_base + disk_rva;
                             h->restorable = !image.is_packed;
@@ -188,6 +230,7 @@ int iat_scan_module(HANDLE process, uint32_t pid, const module_info_t* mod,
 
                 found++;
             }
+        next_thunk:;
         }
 
         if (have_disk) {

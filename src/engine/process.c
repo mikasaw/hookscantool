@@ -111,6 +111,17 @@ int process_enum_modules(uint32_t pid, process_info_t* info)
     if (Module32FirstW(snap, &me)) {
         int i = 0;
         do {
+            /* The snapshot can list the same module twice (the main module
+             * of a WOW64 process shows up in both passes) — dedupe by base. */
+            bool dup = false;
+            for (int k = 0; k < i; k++) {
+                if (info->modules[k].base_addr == (uintptr_t)me.modBaseAddr) {
+                    dup = true;
+                    break;
+                }
+            }
+            if (dup) continue;
+
             WideCharToMultiByte(CP_UTF8, 0, me.szModule, -1,
                                info->modules[i].name, sizeof(info->modules[i].name), NULL, NULL);
             WideCharToMultiByte(CP_UTF8, 0, me.szExePath, -1,

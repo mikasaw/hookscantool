@@ -342,6 +342,55 @@ static void test_section_names(void)
     free(data);
 }
 
+
+/* --- pe_is_forwarder_string --- */
+
+static void test_forwarder_valid(void)
+{
+    char dll[48];
+    ASSERT_TRUE(pe_is_forwarder_string("NTDLL.RtlInitializeSListHead", dll, sizeof(dll)));
+    ASSERT_STREQ(dll, "NTDLL");
+    ASSERT_TRUE(pe_is_forwarder_string("api-ms-win-core-heap-l1-1-0.HeapAlloc", dll, sizeof(dll)));
+    ASSERT_STREQ(dll, "api-ms-win-core-heap-l1-1-0");
+}
+
+static void test_forwarder_ordinal(void)
+{
+    char dll[48];
+    ASSERT_TRUE(pe_is_forwarder_string("KERNEL32.#42", dll, sizeof(dll)));
+    ASSERT_STREQ(dll, "KERNEL32");
+}
+
+static void test_forwarder_rejects(void)
+{
+    char dll[48];
+    ASSERT_FALSE(pe_is_forwarder_string("nodot", dll, sizeof(dll)));
+    ASSERT_FALSE(pe_is_forwarder_string(".leadingdot", dll, sizeof(dll)));
+    ASSERT_FALSE(pe_is_forwarder_string("trailing.", dll, sizeof(dll)));
+    ASSERT_FALSE(pe_is_forwarder_string("two.dots.here", dll, sizeof(dll)));
+    ASSERT_FALSE(pe_is_forwarder_string("", dll, sizeof(dll)));
+    ASSERT_FALSE(pe_is_forwarder_string("ab.x", dll, sizeof(dll)));   /* too short */
+    ASSERT_FALSE(pe_is_forwarder_string(NULL, dll, sizeof(dll)));
+}
+
+static void test_forwarder_long_dll_boundary(void)
+{
+    char dll[48];
+    /* DLL part longer than 32 chars must be rejected */
+    ASSERT_FALSE(pe_is_forwarder_string("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.func", dll, sizeof(dll)));
+    /* exactly 32 chars is accepted */
+    ASSERT_TRUE(pe_is_forwarder_string("abcdefghijklmnopqrstuvwxyz012345.func", dll, sizeof(dll)));
+    ASSERT_STREQ(dll, "abcdefghijklmnopqrstuvwxyz012345");
+}
+
+static void test_forwarder_small_cap_rejected(void)
+{
+    char dll[8];
+    /* cap too small to hold "NTDLL" + NUL */
+    ASSERT_FALSE(pe_is_forwarder_string("NTDLL.RtlInitializeSListHead", dll, 5));
+    ASSERT_TRUE(pe_is_forwarder_string("NTDLL.RtlInitializeSListHead", dll, 6));
+}
+
 void register_tests_pe_parser(void)
 {
     REGISTER_TEST(parse_valid_pe64);
@@ -354,4 +403,9 @@ void register_tests_pe_parser(void)
     REGISTER_TEST(rva_to_offset);
     REGISTER_TEST(offset_to_rva);
     REGISTER_TEST(section_names);
+    REGISTER_TEST(forwarder_valid);
+    REGISTER_TEST(forwarder_ordinal);
+    REGISTER_TEST(forwarder_rejects);
+    REGISTER_TEST(forwarder_long_dll_boundary);
+    REGISTER_TEST(forwarder_small_cap_rejected);
 }

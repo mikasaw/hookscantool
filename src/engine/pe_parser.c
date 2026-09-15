@@ -365,6 +365,36 @@ int pe_rva_to_offset(const pe_image_t* image, uintptr_t rva, uint32_t* offset)
     return -1;
 }
 
+bool pe_is_forwarder_string(const char* s, char* target_dll, size_t cap)
+{
+    if (!s || !target_dll || cap == 0)
+        return false;
+
+    /* printable ASCII, one dot, non-empty on both sides, DLL name looks sane */
+    size_t len = 0;
+    int dots = 0;
+    size_t dot_pos = 0;
+    for (; s[len]; len++) {
+        unsigned char c = (unsigned char)s[len];
+        if (c < 0x20 || c > 0x7E)
+            return false;
+        if (c == '.') {
+            dots++;
+            dot_pos = len;
+        }
+    }
+    if (len < 5 || dots != 1 || dot_pos == 0 || dot_pos + 1 >= len)
+        return false;
+    if (dot_pos > 32)   /* DLL part unreasonably long */
+        return false;
+
+    if (cap <= dot_pos)
+        return false;
+    memcpy(target_dll, s, dot_pos);
+    target_dll[dot_pos] = '\0';
+    return true;
+}
+
 int pe_offset_to_rva(const pe_image_t* image, uint32_t offset, uintptr_t* rva)
 {
     for (int i = 0; i < image->section_count; i++) {

@@ -20,19 +20,52 @@ bool wow64_is_process(HANDLE process)
     return is_wow64 ? true : false;
 }
 
+/* Read the PE machine type of a module in the target process
+ * (0x014C = i386, 0x8664 = x64). Returns 0 on failure. */
+static WORD wow64_read_machine(HANDLE process, uintptr_t base)
+{
+    BYTE dos[64];
+    SIZE_T read = 0;
+    if (!ReadProcessMemory(process, (LPCVOID)(uintptr_t)base, dos, sizeof(dos), &read) ||
+        read < sizeof(dos))
+        return 0;
+    if (dos[0] != 'M' || dos[1] != 'Z')
+        return 0;
+    uint32_t e_lfanew = 0;
+    memcpy(&e_lfanew, dos + 0x3C, sizeof(e_lfanew));
+    if (e_lfanew == 0 || e_lfanew > 0x1000000)
+        return 0;
+
+    BYTE nth[6];
+    if (!ReadProcessMemory(process, (LPCVOID)(uintptr_t)(base + e_lfanew), nth, sizeof(nth), &read) ||
+        read < sizeof(nth))
+        return 0;
+    if (nth[0] != 'P' || nth[1] != 'E')
+        return 0;
+    WORD machine = 0;
+    memcpy(&machine, nth + 4, sizeof(machine));
+    return machine;
+}
+
 int wow64_enum_modules(uint32_t pid, process_info_t* info)
 {
-    /* WoW64 modules use the same Toolhelp32 API; just mark them as wow64 */
+    /* WoW64 modules use the same Toolhelp32 API; just mark them as wow64.
+     * Open the process once here for header validation. */
+    HANDLE process = OpenProcess(PROCESS_VM_READ | PROCESS_QUERY_INFORMATION, FALSE, pid);
+    if (!process)
+        return -1;
+
     int result = process_enum_modules(pid, info);
     if (result == 0) {
         int kept = 0;
         for (int i = 0; i < info->module_count; i++) {
             info->modules[i].is_wow64 = true;
-            /* The snapshot can also contain the process's 64-bit system
-             * modules (64-bit ntdll etc.). They share names with the 32-bit
-             * ones and poison range lookups — keep only the 32-bit half. */
-            if (info->modules[i].base_addr > 0xFFFFFFFFull ||
-                (uint64_t)info->modules[i].base_addr + info->modules[i].size > 0x100000000ull)
+            /* The snapshot also contains the process's 64-bit system modules
+             * (64-bit ntdll, wow64cpu below 4GB, ...). Their names collide
+             * with the 32-bit ones and poison range lookups, and their code
+             * is x64 — keep only modules whose PE machine says i386. */
+            WORD machine = wow64_read_machine(process, info->modules[i].base_addr);
+            if (machine != 0x014C)
                 continue;
             if (kept != i)
                 info->modules[kept] = info->modules[i];
@@ -40,6 +73,7 @@ int wow64_enum_modules(uint32_t pid, process_info_t* info)
         }
         info->module_count = kept;
     }
+    CloseHandle(process);
     return result;
 }
 
