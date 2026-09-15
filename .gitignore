@@ -2,7 +2,7 @@
 build/
 build2/
 build3/
-build-msvc/
+build-msvc*/
 
 # Build artifacts
 *.exe
