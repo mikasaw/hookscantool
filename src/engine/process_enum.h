@@ -9,6 +9,13 @@ extern "C" {
 #include <windows.h>
 
 /*
+ * Read the target process's image file name (basename only, UTF-8) into buf.
+ * Tries GetModuleFileNameExW, then QueryFullProcessImageNameW, then
+ * GetProcessImageFileNameW. Leaves buf empty on total failure.
+ */
+void process_read_image_name(HANDLE process, char* buf, size_t buf_size);
+
+/*
  * Enumerate all running processes.
  * Returns array of process_info_t (with pid and name filled, no modules yet).
  * Caller must free with process_free_list.

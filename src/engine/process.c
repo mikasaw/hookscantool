@@ -4,6 +4,37 @@
 #include <string.h>
 #include <psapi.h>
 
+void process_read_image_name(HANDLE process, char* buf, size_t buf_size)
+{
+    if (!buf || buf_size == 0)
+        return;
+    buf[0] = '\0';
+
+    WCHAR wpath[1024];
+    const DWORD wcap = (DWORD)(sizeof(wpath) / sizeof(wpath[0]));
+    DWORD n = GetModuleFileNameExW(process, NULL, wpath, wcap);
+    if (n == 0) {
+        DWORD wn = wcap;
+        if (QueryFullProcessImageNameW(process, 0, wpath, &wn)) {
+            n = wn;
+        } else {
+            n = GetProcessImageFileNameW(process, wpath, wcap);
+        }
+    }
+    if (n == 0)
+        return;
+    wpath[wcap - 1] = L'\0';
+
+    /* Basename only: strip everything up to the last path separator */
+    WCHAR* base = wpath;
+    for (WCHAR* c = wpath; *c; c++) {
+        if (*c == L'\\' || *c == L'/')
+            base = c + 1;
+    }
+    WideCharToMultiByte(CP_UTF8, 0, base, -1,
+                        buf, (int)buf_size, NULL, NULL);
+}
+
 process_info_t* process_enum_all(int* count)
 {
     *count = 0;
@@ -105,14 +136,7 @@ int process_get_info(uint32_t pid, process_info_t* info)
     if (!proc)
         return -1;
 
-    WCHAR name_buf[64];
-    if (GetProcessImageFileNameW(proc, name_buf, 64) > 0) {
-        /* Extract just the filename from the full path */
-        WCHAR* slash = wcsrchr(name_buf, L'\\');
-        if (slash) slash++; else slash = name_buf;
-        WideCharToMultiByte(CP_UTF8, 0, slash, -1,
-                           info->name, sizeof(info->name), NULL, NULL);
-    }
+    process_read_image_name(proc, info->name, sizeof(info->name));
     CloseHandle(proc);
 
     return process_enum_modules(pid, info);
