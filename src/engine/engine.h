@@ -16,6 +16,11 @@ bool engine_restore_hook(uint32_t pid, hook_entry_t* entry);
 
 int engine_report_to_json(const hook_report_t* report, const char* path);
 
+/* Write an array of reports (e.g. --deep multi-process scan) as a single
+ * JSON document: {"schema_version":1,"process_count":N,"processes":[...]}. */
+int engine_reports_to_json(const hook_report_t* const* reports, int count,
+                           const char* path);
+
 void engine_free_report(hook_report_t* report);
 
 module_report_t* engine_recon_process(uint32_t pid);

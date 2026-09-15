@@ -47,13 +47,7 @@ hook_report_t* engine_scan_process(uint32_t pid)
     pinfo.pid = pid;
 
     /* Read process name from the existing handle */
-    WCHAR name_buf[64];
-    if (GetProcessImageFileNameW(process, name_buf, 64) > 0) {
-        WCHAR* slash = wcsrchr(name_buf, L'\\');
-        if (slash) slash++; else slash = name_buf;
-        WideCharToMultiByte(CP_UTF8, 0, slash, -1,
-                           pinfo.name, sizeof(pinfo.name), NULL, NULL);
-    }
+    process_read_image_name(process, pinfo.name, sizeof(pinfo.name));
 
     bool is_wow64 = wow64_is_process(process);
 
@@ -229,6 +223,85 @@ static void json_write_string(FILE* f, const char* s)
     fputc('"', f);
 }
 
+/* Write one report object's fields (everything between the braces).
+ * Base indent is 4 spaces so the same writer serves both single reports
+ * and the process array in engine_reports_to_json. */
+static void json_write_report_body(FILE* f, const hook_report_t* report)
+{
+    fprintf(f, "    \"pid\": %u,\n", report->pid);
+    fprintf(f, "    \"process_name\": ");
+    json_write_string(f, report->process_name);
+    fprintf(f, ",\n");
+    fprintf(f, "    \"hook_count\": %d,\n", report->hook_count);
+    fprintf(f, "    \"modules_scanned\": %d,\n", report->modules_scanned);
+    fprintf(f, "    \"scan_time_ms\": %llu,\n", (unsigned long long)report->scan_time_ms);
+    if (report->error_code != 0) {
+        fprintf(f, "    \"error_code\": %d,\n", report->error_code);
+        fprintf(f, "    \"error_msg\": ");
+        json_write_string(f, report->error_msg);
+        fprintf(f, ",\n");
+    }
+    fprintf(f, "    \"hooks\": [\n");
+
+    for (int i = 0; i < report->hook_count; i++) {
+        const hook_entry_t* h = &report->hooks[i];
+        const char* type_str = (h->type == HOOK_IAT) ? "IAT" :
+                               (h->type == HOOK_INLINE) ? "INLINE" : "EAT";
+
+        fprintf(f, "      {\n");
+        fprintf(f, "        \"module\": ");
+        json_write_string(f, h->module_name);
+        fprintf(f, ",\n");
+        fprintf(f, "        \"function\": ");
+        json_write_string(f, h->function_name);
+        fprintf(f, ",\n");
+        fprintf(f, "        \"type\": \"%s\",\n", type_str);
+        fprintf(f, "        \"original_addr\": \"0x%016llX\",\n", (unsigned long long)h->original_addr);
+        fprintf(f, "        \"current_addr\": \"0x%016llX\",\n", (unsigned long long)h->current_addr);
+        fprintf(f, "        \"restorable\": %s,\n", h->restorable ? "true" : "false");
+        fprintf(f, "        \"chain_depth\": %d,\n", h->chain_depth);
+
+        /* Original bytes */
+        fprintf(f, "        \"original_bytes\": \"");
+        int obc = h->original_byte_count;
+        if (obc > (int)sizeof(h->original_bytes)) obc = (int)sizeof(h->original_bytes);
+        for (int b = 0; b < obc; b++)
+            fprintf(f, "%02X", h->original_bytes[b]);
+        fprintf(f, "\",\n");
+
+        /* Hooked bytes */
+        fprintf(f, "        \"hooked_bytes\": \"");
+        int hbc = h->hooked_byte_count;
+        if (hbc > (int)sizeof(h->hooked_bytes)) hbc = (int)sizeof(h->hooked_bytes);
+        for (int b = 0; b < hbc; b++)
+            fprintf(f, "%02X", h->hooked_bytes[b]);
+        fprintf(f, "\",\n");
+
+        fprintf(f, "        \"chain\": [\n");
+
+        for (int j = 0; h->chain && j < h->chain_depth; j++) {
+            fprintf(f, "          {\"address\": \"0x%016llX\", \"disasm\": ", (unsigned long long)h->chain[j].address);
+            json_write_string(f, h->chain[j].disasm);
+            fprintf(f, "}%s\n", (j < h->chain_depth - 1) ? "," : "");
+        }
+
+        fprintf(f, "        ]\n");
+        fprintf(f, "      }%s\n", (i < report->hook_count - 1) ? "," : "");
+    }
+
+    fprintf(f, "    ]\n");
+}
+
+/* Shared tail for both JSON writers */
+static int json_finish(FILE* f)
+{
+    /* ferror catches any failed write since open (disk full, etc.) */
+    bool ok = ferror(f) == 0;
+    if (fclose(f) != 0)
+        ok = false;
+    return ok ? 0 : -1;
+}
+
 int engine_report_to_json(const hook_report_t* report, const char* path)
 {
     if (!report || !path) return -1;
@@ -238,75 +311,34 @@ int engine_report_to_json(const hook_report_t* report, const char* path)
 
     fprintf(f, "{\n");
     fprintf(f, "  \"schema_version\": 1,\n");
-    fprintf(f, "  \"pid\": %u,\n", report->pid);
-    fprintf(f, "  \"process_name\": ");
-    json_write_string(f, report->process_name);
-    fprintf(f, ",\n");
-    fprintf(f, "  \"hook_count\": %d,\n", report->hook_count);
-    fprintf(f, "  \"modules_scanned\": %d,\n", report->modules_scanned);
-    fprintf(f, "  \"scan_time_ms\": %llu,\n", (unsigned long long)report->scan_time_ms);
-    if (report->error_code != 0) {
-        fprintf(f, "  \"error_code\": %d,\n", report->error_code);
-        fprintf(f, "  \"error_msg\": ");
-        json_write_string(f, report->error_msg);
-        fprintf(f, ",\n");
-    }
-    fprintf(f, "  \"hooks\": [\n");
+    json_write_report_body(f, report);
+    fprintf(f, "}\n");
+    return json_finish(f);
+}
 
-    for (int i = 0; i < report->hook_count; i++) {
-        const hook_entry_t* h = &report->hooks[i];
-        const char* type_str = (h->type == HOOK_IAT) ? "IAT" :
-                               (h->type == HOOK_INLINE) ? "INLINE" : "EAT";
+int engine_reports_to_json(const hook_report_t* const* reports, int count,
+                           const char* path)
+{
+    if (!path || (count > 0 && !reports)) return -1;
 
+    FILE* f = fopen(path, "wb");
+    if (!f) return -1;
+
+    fprintf(f, "{\n");
+    fprintf(f, "  \"schema_version\": 1,\n");
+    fprintf(f, "  \"process_count\": %d,\n", count);
+    fprintf(f, "  \"processes\": [\n");
+
+    for (int i = 0; i < count; i++) {
         fprintf(f, "    {\n");
-        fprintf(f, "      \"module\": ");
-        json_write_string(f, h->module_name);
-        fprintf(f, ",\n");
-        fprintf(f, "      \"function\": ");
-        json_write_string(f, h->function_name);
-        fprintf(f, ",\n");
-        fprintf(f, "      \"type\": \"%s\",\n", type_str);
-        fprintf(f, "      \"original_addr\": \"0x%016llX\",\n", (unsigned long long)h->original_addr);
-        fprintf(f, "      \"current_addr\": \"0x%016llX\",\n", (unsigned long long)h->current_addr);
-        fprintf(f, "      \"restorable\": %s,\n", h->restorable ? "true" : "false");
-        fprintf(f, "      \"chain_depth\": %d,\n", h->chain_depth);
-
-        /* Original bytes */
-        fprintf(f, "      \"original_bytes\": \"");
-        int obc = h->original_byte_count;
-        if (obc > (int)sizeof(h->original_bytes)) obc = (int)sizeof(h->original_bytes);
-        for (int b = 0; b < obc; b++)
-            fprintf(f, "%02X", h->original_bytes[b]);
-        fprintf(f, "\",\n");
-
-        /* Hooked bytes */
-        fprintf(f, "      \"hooked_bytes\": \"");
-        int hbc = h->hooked_byte_count;
-        if (hbc > (int)sizeof(h->hooked_bytes)) hbc = (int)sizeof(h->hooked_bytes);
-        for (int b = 0; b < hbc; b++)
-            fprintf(f, "%02X", h->hooked_bytes[b]);
-        fprintf(f, "\",\n");
-
-        fprintf(f, "      \"chain\": [\n");
-
-        for (int j = 0; h->chain && j < h->chain_depth; j++) {
-            fprintf(f, "        {\"address\": \"0x%016llX\", \"disasm\": ", (unsigned long long)h->chain[j].address);
-            json_write_string(f, h->chain[j].disasm);
-            fprintf(f, "}%s\n", (j < h->chain_depth - 1) ? "," : "");
-        }
-
-        fprintf(f, "      ]\n");
-        fprintf(f, "    }%s\n", (i < report->hook_count - 1) ? "," : "");
+        if (reports[i])
+            json_write_report_body(f, reports[i]);
+        fprintf(f, "    }%s\n", (i < count - 1) ? "," : "");
     }
 
     fprintf(f, "  ]\n");
     fprintf(f, "}\n");
-
-    /* ferror catches any failed write since open (disk full, etc.) */
-    bool ok = ferror(f) == 0;
-    if (fclose(f) != 0)
-        ok = false;
-    return ok ? 0 : -1;
+    return json_finish(f);
 }
 
 void engine_free_report(hook_report_t* report)
@@ -354,13 +386,7 @@ module_report_t* engine_recon_process(uint32_t pid)
     pinfo.pid = pid;
 
     /* Read process name from the existing handle (avoids double OpenProcess) */
-    WCHAR name_buf[64];
-    if (GetProcessImageFileNameW(process, name_buf, 64) > 0) {
-        WCHAR* slash = wcsrchr(name_buf, L'\\');
-        if (slash) slash++; else slash = name_buf;
-        WideCharToMultiByte(CP_UTF8, 0, slash, -1,
-                           pinfo.name, sizeof(pinfo.name), NULL, NULL);
-    }
+    process_read_image_name(process, pinfo.name, sizeof(pinfo.name));
 
     bool is_wow64 = wow64_is_process(process);
     bool is_64bit = !is_wow64;
