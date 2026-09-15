@@ -1,0 +1,35 @@
+#include <windows.h>
+
+#define HOOKSCAN_VERSION_MAJOR 1
+#define HOOKSCAN_VERSION_MINOR 0
+#define HOOKSCAN_VERSION_PATCH 0
+
+#define HOOKSCAN_VERSION_STR "1.0.0\0"
+
+VS_VERSION_INFO VERSIONINFO
+FILEVERSION     HOOKSCAN_VERSION_MAJOR,HOOKSCAN_VERSION_MINOR,HOOKSCAN_VERSION_PATCH,0
+PRODUCTVERSION  HOOKSCAN_VERSION_MAJOR,HOOKSCAN_VERSION_MINOR,HOOKSCAN_VERSION_PATCH,0
+FILEFLAGSMASK   VS_FFI_FILEFLAGSMASK
+FILEFLAGS       0
+FILEOS          VOS_NT_WINDOWS32
+FILETYPE        VFT_APP
+FILESUBTYPE     VFT2_UNKNOWN
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "040904B0"
+        BEGIN
+            VALUE "CompanyName",      ""
+            VALUE "FileDescription",  "Windows Process Hook Scanner"
+            VALUE "FileVersion",      HOOKSCAN_VERSION_STR
+            VALUE "InternalName",     "HookScanTool"
+            VALUE "OriginalFilename", "hookscantool.exe"
+            VALUE "ProductName",      "HookScanTool"
+            VALUE "ProductVersion",   HOOKSCAN_VERSION_STR
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x409, 1200
+    END
+END

@@ -39,6 +39,7 @@ target_link_libraries(hookscan_engine PRIVATE Zydis psapi)
 # --- CLI tool ---
 add_executable(hookscan_cli
     src/cli/main.c
+    src/version.rc
 )
 target_link_libraries(hookscan_cli PRIVATE hookscan_engine Zydis psapi)
 
@@ -66,6 +67,7 @@ add_executable(hookscantool WIN32
     src/gui/ui_chain_view.cpp
     src/gui/ui_restore.cpp
     src/gui/ui_module_list.cpp
+    src/version.rc
 )
 target_link_libraries(hookscantool PRIVATE
     hookscan_engine
@@ -85,12 +87,52 @@ target_include_directories(hookscantool PRIVATE
 # --- Compiler-specific settings ---
 if(MSVC)
     add_definitions(-D_CRT_SECURE_NO_WARNINGS)
-    target_compile_options(hookscan_engine PRIVATE /W4)
-    target_compile_options(hookscan_cli PRIVATE /W4)
-    target_compile_options(hookscantool PRIVATE /W4)
+    target_compile_options(hookscan_engine PRIVATE /W4 /wd4819 /wd4152)
+    target_compile_options(hookscan_cli PRIVATE /W4 /wd4819 /wd4152)
+    target_compile_options(hookscantool PRIVATE /W4 /wd4819 /wd4152)
+    if(CMAKE_BUILD_TYPE STREQUAL "Release")
+        target_compile_options(hookscan_engine PRIVATE /O2 /GS-)
+        target_compile_options(hookscan_cli PRIVATE /O2 /GS-)
+        target_compile_options(hookscantool PRIVATE /O2 /GS-)
+    endif()
 elseif(CMAKE_C_COMPILER_ID STREQUAL "GNU")
     add_definitions(-D_CRT_SECURE_NO_WARNINGS)
     target_compile_options(hookscan_engine PRIVATE -Wall -Wextra)
     target_compile_options(hookscan_cli PRIVATE -Wall -Wextra)
     target_compile_options(hookscantool PRIVATE -Wall -Wextra)
+    if(CMAKE_BUILD_TYPE STREQUAL "Release")
+        target_compile_options(hookscan_engine PRIVATE -O2 -fomit-frame-pointer)
+        target_compile_options(hookscan_cli PRIVATE -O2 -fomit-frame-pointer)
+        target_compile_options(hookscantool PRIVATE -O2 -fomit-frame-pointer)
+    endif()
+endif()
+
+# --- Test targets ---
+option(HOOKSCAN_BUILD_TESTS "Build unit tests" OFF)
+
+if(HOOKSCAN_BUILD_TESTS)
+    # Compile engine with test exports enabled
+    target_compile_definitions(hookscan_engine PRIVATE HOOKSCAN_TESTING)
+
+    add_executable(hookscan_test
+        test/test_runner.c
+        test/test_pe_parser.c
+        test/test_module_scorer.c
+        test/test_inline_matcher.c
+    )
+    target_include_directories(hookscan_test PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/test
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/engine
+    )
+    target_compile_definitions(hookscan_test PRIVATE HOOKSCAN_TESTING)
+    target_link_libraries(hookscan_test PRIVATE
+        hookscan_engine
+        Zydis
+        psapi
+    )
+    if(MSVC)
+        target_compile_options(hookscan_test PRIVATE /W4 /wd4819 /wd4152)
+    elseif(CMAKE_C_COMPILER_ID STREQUAL "GNU")
+        target_compile_options(hookscan_test PRIVATE -Wall -Wextra)
+    endif()
 endif()

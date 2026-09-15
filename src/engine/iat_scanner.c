@@ -1,5 +1,5 @@
 #include "iat_scanner.h"
-#include "process.h"
+#include "process_enum.h"
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
@@ -79,7 +79,7 @@ int iat_scan_module(HANDLE process, uint32_t pid, const module_info_t* mod,
         /* Parse the on-disk DLL once for this import descriptor */
         uint8_t* disk_data = NULL;
         size_t   disk_size = 0;
-        pe_image_t disk_image;
+        pe_image_t disk_image = {0};
         bool have_disk = false;
         if (dll_path) {
             have_disk = (pe_parse_from_disk(dll_path, &disk_data, &disk_size, &disk_image) == 0);

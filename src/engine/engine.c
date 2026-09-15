@@ -1,5 +1,5 @@
 #include "engine.h"
-#include "process.h"
+#include "process_enum.h"
 #include "iat_scanner.h"
 #include "eat_scanner.h"
 #include "inline_scanner.h"
@@ -10,6 +10,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
+#include <psapi.h>
 
 #define INITIAL_HOOK_CAP 256
 
@@ -38,18 +39,29 @@ hook_report_t* engine_scan_process(uint32_t pid)
         return report;
     }
 
-    /* Get process info with modules */
+    /* Get process info with modules.
+     * Note: GetProcessImageFileNameW uses the already-open handle from
+     * engine_scan_process, avoiding a redundant OpenProcess call. */
     process_info_t pinfo;
     memset(&pinfo, 0, sizeof(pinfo));
+    pinfo.pid = pid;
+
+    /* Read process name from the existing handle */
+    WCHAR name_buf[64];
+    if (GetProcessImageFileNameW(process, name_buf, 64) > 0) {
+        WCHAR* slash = wcsrchr(name_buf, L'\\');
+        if (slash) slash++; else slash = name_buf;
+        WideCharToMultiByte(CP_ACP, 0, slash, -1,
+                           pinfo.name, sizeof(pinfo.name), NULL, NULL);
+    }
 
     bool is_wow64 = wow64_is_process(process);
 
     int mod_result;
     if (is_wow64) {
         mod_result = wow64_enum_modules(pid, &pinfo);
-        pinfo.pid = pid;
     } else {
-        mod_result = process_get_info(pid, &pinfo);
+        mod_result = process_enum_modules(pid, &pinfo);
     }
 
     if (mod_result != 0) {
@@ -328,6 +340,16 @@ module_report_t* engine_recon_process(uint32_t pid)
 
     process_info_t pinfo;
     memset(&pinfo, 0, sizeof(pinfo));
+    pinfo.pid = pid;
+
+    /* Read process name from the existing handle (avoids double OpenProcess) */
+    WCHAR name_buf[64];
+    if (GetProcessImageFileNameW(process, name_buf, 64) > 0) {
+        WCHAR* slash = wcsrchr(name_buf, L'\\');
+        if (slash) slash++; else slash = name_buf;
+        WideCharToMultiByte(CP_ACP, 0, slash, -1,
+                           pinfo.name, sizeof(pinfo.name), NULL, NULL);
+    }
 
     bool is_wow64 = wow64_is_process(process);
     bool is_64bit = !is_wow64;
@@ -335,9 +357,8 @@ module_report_t* engine_recon_process(uint32_t pid)
     int mod_result;
     if (is_wow64) {
         mod_result = wow64_enum_modules(pid, &pinfo);
-        pinfo.pid = pid;
     } else {
-        mod_result = process_get_info(pid, &pinfo);
+        mod_result = process_enum_modules(pid, &pinfo);
     }
 
     if (mod_result != 0) {

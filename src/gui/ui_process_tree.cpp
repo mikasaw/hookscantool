@@ -1,5 +1,5 @@
 #include "ui_process_tree.h"
-#include "process.h"
+#include "process_enum.h"
 #include "engine.h"
 #include <imgui.h>
 #include <cstdio>

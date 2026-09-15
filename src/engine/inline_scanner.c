@@ -99,6 +99,18 @@ static bool instructions_match(const ZydisDecodedInstruction* a,
     return true;
 }
 
+#ifdef HOOKSCAN_TESTING
+/* Exported for unit testing — declared in test/inline_scanner_test.h */
+bool test_instructions_match(const ZydisDecodedInstruction* a,
+                              const ZydisDecodedOperand* ops_a,
+                              const ZydisDecodedInstruction* b,
+                              const ZydisDecodedOperand* ops_b,
+                              uintptr_t base_a, uintptr_t base_b)
+{
+    return instructions_match(a, ops_a, b, ops_b, base_a, base_b);
+}
+#endif
+
 int inline_scan_module(HANDLE process, const module_info_t* mod,
                        hook_entry_t* hooks, int hook_cap)
 {

@@ -177,6 +177,11 @@ uint32_t ui_module_list_render(uint32_t selected_pid, bool scanning)
                 }
                 g_recon_active.store(false);
             }).detach();
+        } else {
+            /* Recon or scan in flight — defer start.
+             * Reset debounce so we retry next frame instead of dropping the recon. */
+            std::lock_guard<std::mutex> lock(g_recon_mutex);
+            g_recon_debounce = 0.05f;  /* retry in 50ms */
         }
         ImGui::Text("Loading modules...");
         return selected_pid;
@@ -197,6 +202,14 @@ uint32_t ui_module_list_render(uint32_t selected_pid, bool scanning)
         if (g_pending_recon_free) {
             engine_free_module_report(g_pending_recon_free);
             g_pending_recon_free = NULL;
+        }
+
+        /* If recon completed but for a stale PID (user switched during recon),
+         * trigger a new recon instead of showing wrong data. */
+        if (!g_recon_active.load() && !g_sel_scanning.load() &&
+            g_recon != NULL && g_recon->pid != selected_pid &&
+            g_recon_pid == selected_pid) {
+            g_recon_debounce = 0.2f;
         }
     }
 

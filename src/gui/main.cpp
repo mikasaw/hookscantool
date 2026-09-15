@@ -1,5 +1,5 @@
 #include "engine.h"
-#include "process.h"
+#include "process_enum.h"
 #include "ui_module_list.h"
 #include "ui_process_tree.h"
 #include <imgui.h>
@@ -11,6 +11,8 @@
 
 /* Forward declare message handler from imgui_impl_win32.cpp */
 extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
+
+#define HOOKSCAN_VERSION "1.0.0"
 
 /* Global DirectX resources */
 static ID3D11Device*           g_pd3dDevice = NULL;
@@ -38,7 +40,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int)
                       hInstance, NULL, NULL, NULL, NULL, _T("HookScanTool"), NULL };
     RegisterClassEx(&wc);
 
-    HWND hwnd = CreateWindow(wc.lpszClassName, _T("HookScanTool - Windows Process Hook Scanner"),
+    HWND hwnd = CreateWindow(wc.lpszClassName, _T("HookScanTool v" HOOKSCAN_VERSION " - Windows Process Hook Scanner"),
                              WS_OVERLAPPEDWINDOW, 100, 100, 1280, 720,
                              NULL, NULL, wc.hInstance, NULL);
 
@@ -67,6 +69,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int)
 
     /* State */
     int selected_hook = -1;
+    bool show_about = false;
 
     /* Main loop */
     MSG msg;
@@ -82,9 +85,9 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int)
         ImGui_ImplWin32_NewFrame();
         ImGui::NewFrame();
 
-        /* --- Main layout --- */
+        /* --- Main layout (leave 22px for status bar) --- */
         ImGui::SetNextWindowPos(ImVec2(0, 0));
-        ImGui::SetNextWindowSize(io.DisplaySize);
+        ImGui::SetNextWindowSize(ImVec2(io.DisplaySize.x, io.DisplaySize.y - 22));
         ImGui::Begin("Main", NULL,
             ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
             ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoBringToFrontOnFocus |
@@ -93,12 +96,38 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int)
         /* Menu bar */
         if (ImGui::BeginMenuBar()) {
             if (ImGui::BeginMenu("File")) {
-                if (ImGui::MenuItem("Exit")) {
+                if (ImGui::MenuItem("Exit", "Alt+F4")) {
                     PostQuitMessage(0);
                 }
                 ImGui::EndMenu();
             }
+            if (ImGui::BeginMenu("Help")) {
+                if (ImGui::MenuItem("About")) {
+                    show_about = true;
+                }
+                ImGui::EndMenu();
+            }
             ImGui::EndMenuBar();
+        }
+
+        /* About dialog */
+        if (show_about) {
+            ImGui::OpenPopup("About HookScanTool");
+            if (ImGui::BeginPopupModal("About HookScanTool", &show_about,
+                ImGuiWindowFlags_AlwaysAutoResize)) {
+                ImGui::Text("HookScanTool v%s", HOOKSCAN_VERSION);
+                ImGui::Separator();
+                ImGui::Text("Windows Process Hook Scanner");
+                ImGui::Text("Detects IAT, EAT, and inline hooks in running processes.");
+                ImGui::Separator();
+                ImGui::Text("Engine: Zydis disassembler + PE parsing");
+                ImGui::Text("GUI: Dear ImGui + DirectX 11");
+                ImGui::Separator();
+                if (ImGui::Button("Close")) {
+                    show_about = false;
+                }
+                ImGui::EndPopup();
+            }
         }
 
         /* Split layout: left panel (25%) | right area (75%) */
@@ -151,6 +180,41 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int)
         ImGui::EndChild(); /* RightArea */
 
         ImGui::End(); /* Main */
+
+        /* --- Status bar --- */
+        ImGui::SetNextWindowPos(ImVec2(0, io.DisplaySize.y - 22));
+        ImGui::SetNextWindowSize(ImVec2(io.DisplaySize.x, 22));
+        ImGui::Begin("StatusBar", NULL,
+            ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
+            ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoBringToFrontOnFocus |
+            ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoSavedSettings);
+
+        {
+            /* Left: PID and scan info */
+            hook_report_t* status_report = ui_get_last_report();
+            if (ui_is_scanning()) {
+                ImGui::Text("Scanning...    ");
+            } else if (status_report) {
+                if (status_report->error_code != 0) {
+                    ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f),
+                        "PID %u: ERROR - %s", status_report->pid, status_report->error_msg);
+                } else {
+                    ImGui::Text("PID %u | Hooks: %d | Modules: %d | Time: %llu ms",
+                        status_report->pid, status_report->hook_count,
+                        status_report->modules_scanned,
+                        (unsigned long long)status_report->scan_time_ms);
+                }
+            } else {
+                ImGui::Text("Select a process and click Scan Selected");
+            }
+
+            /* Right: version */
+            float status_w = ImGui::GetContentRegionAvail().x;
+            ImGui::SameLine(status_w - 100);
+            ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.5f, 1.0f), "v%s", HOOKSCAN_VERSION);
+        }
+
+        ImGui::End();
 
         /* Rendering */
         ImGui::Render();
