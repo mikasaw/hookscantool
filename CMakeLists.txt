@@ -46,6 +46,9 @@ add_library(hookscan_engine STATIC
 target_include_directories(hookscan_engine PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/src/engine
 )
+target_include_directories(hookscan_engine PRIVATE
+    "${HOOKSCAN_GENERATED_DIR}"
+)
 target_link_libraries(hookscan_engine PRIVATE Zydis psapi)
 
 # --- CLI tool ---

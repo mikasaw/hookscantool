@@ -26,6 +26,8 @@ static void print_usage(const char* prog)
     printf("       %s --deep [options]\n", prog);
     printf("Options:\n");
     printf("  --json <path>       Write JSON report to file\n");
+    printf("  --csv <path>        Write report as CSV (one row per hook)\n");
+    printf("  --sarif <path>      Write report as SARIF 2.1.0 (code scanning)\n");
     printf("  --restore <n>       Restore hook #n (0-indexed)\n");
     printf("  --list              List all processes and exit\n");
     printf("  --modules           List modules with suspicion scores (uses recon)\n");
@@ -298,6 +300,38 @@ static int watch_process(uint32_t pid, int interval_sec, const char* json_path)
 
 /* --- --deep: scan every accessible process --- */
 
+/* Write a report to every output file requested via --json/--csv/--sarif.
+ * Sets *exit_code to 1 on the first write failure. */
+static void write_report_outputs(const hook_report_t* report,
+                                 const char* json_path, const char* csv_path,
+                                 const char* sarif_path, int* exit_code)
+{
+    if (json_path) {
+        if (engine_report_to_json(report, json_path) == 0) {
+            printf("\nJSON report written to: %s\n", json_path);
+        } else {
+            printf("\nFailed to write JSON report to: %s\n", json_path);
+            *exit_code = 1;
+        }
+    }
+    if (csv_path) {
+        if (engine_report_to_csv(report, csv_path) == 0) {
+            printf("CSV report written to: %s\n", csv_path);
+        } else {
+            printf("Failed to write CSV report to: %s\n", csv_path);
+            *exit_code = 1;
+        }
+    }
+    if (sarif_path) {
+        if (engine_report_to_sarif(report, sarif_path) == 0) {
+            printf("SARIF report written to: %s\n", sarif_path);
+        } else {
+            printf("Failed to write SARIF report to: %s\n", sarif_path);
+            *exit_code = 1;
+        }
+    }
+}
+
 static int deep_scan(const char* json_path, bool only_with_hooks)
 {
     int proc_count = 0;
@@ -391,6 +425,8 @@ int main(int argc, char* argv[])
     }
 
     const char* json_path = NULL;
+    const char* csv_path = NULL;
+    const char* sarif_path = NULL;
     int restore_idx = -1;
     int scan_module_idx = -1;
     bool show_modules = false;
@@ -454,6 +490,18 @@ int main(int argc, char* argv[])
                 return 1;
             }
             json_path = argv[++i];
+        } else if (strcmp(argv[i], "--csv") == 0) {
+            if (i + 1 >= argc) {
+                printf("Missing value for --csv\n");
+                return 1;
+            }
+            csv_path = argv[++i];
+        } else if (strcmp(argv[i], "--sarif") == 0) {
+            if (i + 1 >= argc) {
+                printf("Missing value for --sarif\n");
+                return 1;
+            }
+            sarif_path = argv[++i];
         } else if (strcmp(argv[i], "--restore") == 0) {
             if (i + 1 >= argc) {
                 printf("Missing value for --restore\n");
@@ -497,6 +545,10 @@ int main(int argc, char* argv[])
         }
         if (watch_mode || scan_module_idx >= 0 || show_modules || restore_idx >= 0) {
             printf("--deep cannot be combined with --watch/--modules/--scan-module/--restore.\n");
+            return 1;
+        }
+        if (csv_path || sarif_path) {
+            printf("--deep multi-process output is JSON only (--json); --csv/--sarif apply to single-process scans.\n");
             return 1;
         }
         /* --filter s with --deep: only list processes that have hooks */
@@ -564,14 +616,7 @@ int main(int argc, char* argv[])
         }
         print_hook_report(report);
         int exit_code = 0;
-        if (json_path) {
-            if (engine_report_to_json(report, json_path) == 0) {
-                printf("\nJSON report written to: %s\n", json_path);
-            } else {
-                printf("\nFailed to write JSON report to: %s\n", json_path);
-                exit_code = 1;
-            }
-        }
+        write_report_outputs(report, json_path, csv_path, sarif_path, &exit_code);
         engine_free_report(report);
         return exit_code;
     }
@@ -619,15 +664,8 @@ int main(int argc, char* argv[])
         }
     }
 
-    /* Write JSON report if requested */
-    if (json_path) {
-        if (engine_report_to_json(report, json_path) == 0) {
-            printf("\nJSON report written to: %s\n", json_path);
-        } else {
-            printf("\nFailed to write JSON report to: %s\n", json_path);
-            exit_code = 1;
-        }
-    }
+    /* Write report files if requested */
+    write_report_outputs(report, json_path, csv_path, sarif_path, &exit_code);
 
     engine_free_report(report);
     return exit_code;

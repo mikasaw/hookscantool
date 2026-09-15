@@ -48,6 +48,14 @@ int engine_report_to_json(const hook_report_t* report, const char* path);
 int engine_reports_to_json(const hook_report_t* const* reports, int count,
                            const char* path);
 
+/* Write one report as CSV (header + one row per hook; all text fields
+ * quoted, quotes doubled). Returns 0 on success, -1 on failure. */
+int engine_report_to_csv(const hook_report_t* report, const char* path);
+
+/* Write one report as SARIF 2.1.0 (one warning result per hook) for
+ * code-scanning pipelines. Returns 0 on success, -1 on failure. */
+int engine_report_to_sarif(const hook_report_t* report, const char* path);
+
 /* Free a report returned by engine_scan_process/engine_scan_modules,
  * including every hook's chain array. */
 void engine_free_report(hook_report_t* report);

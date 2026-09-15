@@ -7,6 +7,7 @@
 #include "restore.h"
 #include "wow64.h"
 #include "module_scorer.h"
+#include "version.h"
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
@@ -350,6 +351,118 @@ int engine_reports_to_json(const hook_report_t* const* reports, int count,
         fprintf(f, "    }%s\n", (i < count - 1) ? "," : "");
     }
 
+    fprintf(f, "  ]\n");
+    fprintf(f, "}\n");
+    return json_finish(f);
+}
+
+/* --- CSV / SARIF export --- */
+
+/* Write one string as a quoted CSV field (" doubled to "") */
+static void csv_write_field(FILE* f, const char* s)
+{
+    fputc('"', f);
+    for (; s && *s; s++) {
+        if (*s == '"')
+            fputc('"', f);
+        fputc(*s, f);
+    }
+    fputc('"', f);
+}
+
+int engine_report_to_csv(const hook_report_t* report, const char* path)
+{
+    if (!report || !path) return -1;
+
+    FILE* f = fopen(path, "wb");
+    if (!f) return -1;
+
+    fprintf(f, "pid,process_name,module,function,type,original_addr,current_addr,restorable,chain_depth\n");
+    for (int i = 0; i < report->hook_count; i++) {
+        const hook_entry_t* h = &report->hooks[i];
+        fprintf(f, "%u,", report->pid);
+        csv_write_field(f, report->process_name);
+        fputc(',', f);
+        csv_write_field(f, h->module_name);
+        fputc(',', f);
+        csv_write_field(f, h->function_name);
+        fprintf(f, ",%s,0x%016llX,0x%016llX,%s,%d\n",
+                h->type == HOOK_IAT ? "IAT" : h->type == HOOK_INLINE ? "INLINE" : "EAT",
+                (unsigned long long)h->original_addr,
+                (unsigned long long)h->current_addr,
+                h->restorable ? "true" : "false",
+                h->chain_depth);
+    }
+
+    return json_finish(f);
+}
+
+int engine_report_to_sarif(const hook_report_t* report, const char* path)
+{
+    if (!report || !path) return -1;
+
+    FILE* f = fopen(path, "wb");
+    if (!f) return -1;
+
+    fprintf(f, "{\n");
+    fprintf(f, "  \"version\": \"2.1.0\",\n");
+    fprintf(f, "  \"$schema\": \"https://docs.oasis-open.org/sarif-sarif/v2.1.0/csprd01/schemas/sarif-schema-2.1.0.json\",\n");
+    fprintf(f, "  \"runs\": [\n");
+    fprintf(f, "    {\n");
+    fprintf(f, "      \"tool\": {\n");
+    fprintf(f, "        \"driver\": {\n");
+    fprintf(f, "          \"name\": \"HookScanTool\",\n");
+    fprintf(f, "          \"version\": \"%s\",\n", HOOKSCAN_VERSION_STR);
+    fprintf(f, "          \"informationUri\": \"https://github.com/hookscantool/hookscantool\",\n");
+    fprintf(f, "          \"rules\": [\n");
+    fprintf(f, "            {\"id\": \"HOOK-IAT\",    \"shortDescription\": {\"text\": \"Import Address Table hook\"}},\n");
+    fprintf(f, "            {\"id\": \"HOOK-INLINE\", \"shortDescription\": {\"text\": \"Inline (prologue patch) hook\"}},\n");
+    fprintf(f, "            {\"id\": \"HOOK-EAT\",    \"shortDescription\": {\"text\": \"Export Address Table hook\"}}\n");
+    fprintf(f, "          ]\n");
+    fprintf(f, "        }\n");
+    fprintf(f, "      },\n");
+    fprintf(f, "      \"results\": [\n");
+
+    int written = 0;
+    for (int i = 0; i < report->hook_count; i++) {
+        const hook_entry_t* h = &report->hooks[i];
+        const char* type_str = (h->type == HOOK_IAT) ? "IAT" :
+                               (h->type == HOOK_INLINE) ? "INLINE" : "EAT";
+
+        char msg[512];
+        snprintf(msg, sizeof(msg),
+                 "%s hook of %s!%s: expected 0x%016llX, found 0x%016llX%s",
+                 type_str, h->module_name, h->function_name,
+                 (unsigned long long)h->original_addr,
+                 (unsigned long long)h->current_addr,
+                 h->restorable ? " (restorable)" : "");
+        char fp[256];
+        snprintf(fp, sizeof(fp), "%s!%s@%016llX",
+                 h->module_name, h->function_name, (unsigned long long)h->current_addr);
+
+        fprintf(f, "        {\n");
+        fprintf(f, "          \"ruleId\": \"HOOK-%s\",\n", type_str);
+        fprintf(f, "          \"level\": \"warning\",\n");
+        fprintf(f, "          \"message\": {\"text\": ");
+        json_write_string(f, msg);
+        fprintf(f, "},\n");
+        fprintf(f, "          \"partialFingerprints\": {\"hookIdentity\": ");
+        json_write_string(f, fp);
+        fprintf(f, "},\n");
+        fprintf(f, "          \"locations\": [\n");
+        fprintf(f, "            {\n");
+        fprintf(f, "              \"physicalLocation\": {\n");
+        fprintf(f, "                \"address\": {\n");
+        fprintf(f, "                  \"absoluteAddress\": %llu\n", (unsigned long long)h->current_addr);
+        fprintf(f, "                }\n");
+        fprintf(f, "              }\n");
+        fprintf(f, "            }\n");
+        fprintf(f, "          ]\n");
+        fprintf(f, "        }%s\n", (written++ < report->hook_count - 1) ? "," : "");
+    }
+
+    fprintf(f, "      ]\n");
+    fprintf(f, "    }\n");
     fprintf(f, "  ]\n");
     fprintf(f, "}\n");
     return json_finish(f);
