@@ -154,6 +154,7 @@ if(HOOKSCAN_BUILD_TESTS)
         test/test_inline_matcher.c
         test/test_cli_args.c
         test/test_json_writer.c
+        test/test_eat_match.c
         src/cli/args.c
     )
     target_include_directories(hookscan_test PRIVATE

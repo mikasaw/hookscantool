@@ -2,6 +2,31 @@
 #include <stdlib.h>
 #include <string.h>
 
+eat_match_result_t eat_match_disk_rva(const pe_image_t* disk_image,
+                                      const char* func_name,
+                                      uint32_t mem_rva,
+                                      uint32_t* first_rva)
+{
+    bool found = false;
+    uint32_t first = 0;
+    if (disk_image && func_name) {
+        for (int j = 0; j < disk_image->export_count; j++) {
+            if (strcmp(disk_image->exports[j].name, func_name) == 0) {
+                if (!found) {
+                    first = (uint32_t)disk_image->exports[j].rva;
+                    found = true;
+                }
+                if ((uint32_t)disk_image->exports[j].rva == mem_rva)
+                    return EAT_MATCH_ALIAS;
+            }
+        }
+    }
+    if (!found)
+        return EAT_MATCH_NOT_FOUND;
+    if (first_rva) *first_rva = first;
+    return EAT_MATCH_DIFFERENT;
+}
+
 int eat_scan_module(HANDLE process, const module_info_t* mod,
                     hook_entry_t* hooks, int hook_cap, bool* hit_cap)
 {
@@ -82,20 +107,10 @@ int eat_scan_module(HANDLE process, const module_info_t* mod,
          * common in the MSVC runtime DLLs); only if the in-memory RVA differs
          * from EVERY on-disk occurrence is the export table actually hooked. */
         uint32_t disk_func_rva = 0;
-        bool found_in_disk = false;
-        bool rva_is_alias = false;
-        for (int j = 0; j < disk_image.export_count; j++) {
-            if (strcmp(disk_image.exports[j].name, func_name) == 0) {
-                if (!found_in_disk) {
-                    disk_func_rva = (uint32_t)disk_image.exports[j].rva;
-                    found_in_disk = true;
-                }
-                if ((uint32_t)disk_image.exports[j].rva == mem_func_rva) {
-                    rva_is_alias = true;
-                    break;
-                }
-            }
-        }
+        eat_match_result_t m = eat_match_disk_rva(&disk_image, func_name,
+                                                  mem_func_rva, &disk_func_rva);
+        bool found_in_disk = (m != EAT_MATCH_NOT_FOUND);
+        bool rva_is_alias  = (m == EAT_MATCH_ALIAS);
 
         if (!found_in_disk) continue;
         if (rva_is_alias) continue;
