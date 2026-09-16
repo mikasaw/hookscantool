@@ -438,7 +438,8 @@ static int deep_scan(const char* json_path, bool only_with_hooks, int jobs)
 
     int exit_code = 0;
     if (json_path) {
-        if (engine_reports_to_json(reports, (int)shared.report_count, json_path) == 0) {
+        const hook_report_t* const* reports_view = (const hook_report_t* const*)reports;
+        if (engine_reports_to_json(reports_view, (int)shared.report_count, json_path) == 0) {
             printf("\nJSON report written to: %s\n", json_path);
         } else {
             printf("\nFailed to write JSON report to: %s\n", json_path);
